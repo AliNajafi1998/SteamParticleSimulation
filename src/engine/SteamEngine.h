@@ -26,17 +26,21 @@ private:
   // Simulation Steps
   void SpawnParticles(float deltaTime);       // A. Emission
   void CalculateDensityAndPressure();         // B. Density & Pressure
+  void CalculateVorticity();                  // [NEW] Vorticity Calculation
   void CalculateForces();                     // C. Force Accumulation
   void Integrate(float deltaTime);            // D. Integration
   void UpdateThermodynamics(float deltaTime); // E. Thermodynamics & Death
 
-  // SETTINGS
+  // SETTINGS (Public for UI)
+public:
   float gravity;
-  float buoyancyCoeff;      // How much it rises
-  float coolingRate;        // How fast it fades
-  float gasConstant;        // How hard it expands
-  float ambientTemperature; // Temperature where lift stops
+  float buoyancyCoeff;         // How much it rises
+  float coolingRate;           // How fast it fades
+  float gasConstant;           // How hard it expands
+  float ambientTemperature;    // Temperature where lift stops
+  float emissionRate = 200.0f; // Added default
 
+private:
   // MEMORY
   std::vector<SteamParticle> particlePool;
   std::vector<int> deadParticleIndices; // Free list for O(1) spawning

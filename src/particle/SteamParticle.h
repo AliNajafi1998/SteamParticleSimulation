@@ -13,6 +13,8 @@ public:
   vec3 position;
   vec3 velocity;
   vec3 force;
+  vec3 angularVelocity; // How fast and around which axis I am spinning
+  float currentAngle;   // For rendering (0 to 360 degrees)
   float mass;
   float density;
   float pressure;

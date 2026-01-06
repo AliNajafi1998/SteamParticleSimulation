@@ -31,6 +31,7 @@ Camera camera(0.0f, -10.0f, 40.0f, 0.0f, 1.0f, 0.0f, -90.0f, 0.0f);
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
+bool cameraEnabled = true; // [NEW] Toggle for ImGui mouse usage
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
@@ -98,6 +99,20 @@ int main() {
   glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
   glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+  // [NEW] Setup ImGui context
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGuiIO &io = ImGui::GetIO();
+  (void)io;
+  ImGui::StyleColorsDark();
+  ImGui_ImplGlfw_InitForOpenGL(window, true);
+  ImGui_ImplOpenGL3_Init("#version 330");
+
+  bool debugMode =
+      true; // Toggle between Particles (True) and Volumetric (False)
+
+  // Main loop
   // Initial empty upload to define format
   int dw, dh, dd;
   densityVolume.getParams(&dw, &dh, &dd);
@@ -151,7 +166,40 @@ int main() {
     deltaTime = currentFrame - lastFrame;
     lastFrame = currentFrame;
 
-    processInput(window);
+    // Start the Dear ImGui frame
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // UI Window
+    ImGui::Begin("Controller");
+    ImGui::Text("Sim Stats");
+
+    int uiActiveCount = 0;
+    for (const auto &p : steamEngine.getParticles())
+      if (p.active)
+        uiActiveCount++;
+    ImGui::Text("Active Particles: %d", uiActiveCount);
+
+    ImGui::Separator();
+    ImGui::Checkbox("Debug Mode (Particles)", &debugMode);
+
+    ImGui::Separator();
+    ImGui::Text("Physics Parameters");
+    ImGui::SliderFloat("Gravity", &steamEngine.gravity, -10.0f, 1.0f);
+    ImGui::SliderFloat("Buoyancy", &steamEngine.buoyancyCoeff, 0.0f, 10.0f);
+    ImGui::SliderFloat("Cooling Rate", &steamEngine.coolingRate, 0.0f, 2.0f);
+    ImGui::SliderFloat("Emission Rate", &steamEngine.emissionRate, 10.0f,
+                       1000.0f);
+
+    ImGui::End();
+
+    // Make sure to propagate ImGui input capture to camera?
+    // If ImGui wants mouse, don't let camera take it.
+    ImGuiIO &io = ImGui::GetIO();
+    if (!io.WantCaptureMouse) {
+      processInput(window);
+    }
 
     // Update Steam Simulation
     steamEngine.Update(deltaTime);
@@ -260,51 +308,55 @@ int main() {
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
     kurna.draw();
 
-    // [NEW] Render Particles as Points
-    // Create VAO/VBO on first run (lazy init for simplicity in this loop or
-    // global)
-    static unsigned int particleVAO = 0;
-    static unsigned int particleVBO = 0;
-    if (particleVAO == 0) {
-      glGenVertexArrays(1, &particleVAO);
-      glGenBuffers(1, &particleVBO);
-      glBindVertexArray(particleVAO);
-      glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
-      // initial buffer size
-      glBufferData(GL_ARRAY_BUFFER, 2000 * 3 * sizeof(float), NULL,
-                   GL_DYNAMIC_DRAW);
-      glEnableVertexAttribArray(0);
-      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-                            (void *)0);
-      glBindVertexArray(0);
-    }
-
-    std::vector<float> particlePositions;
-    for (const auto &p : steamEngine.getParticles()) {
-      if (p.active) {
-        particlePositions.push_back(p.position[0]);
-        particlePositions.push_back(p.position[1]);
-        particlePositions.push_back(p.position[2]);
+    // [NEW] Render Particles as Points (DEBUG MODE)
+    if (debugMode) {
+      // Create VAO/VBO on first run (lazy init for simple structure)
+      static unsigned int particleVAO = 0;
+      static unsigned int particleVBO = 0;
+      if (particleVAO == 0) {
+        glGenVertexArrays(1, &particleVAO);
+        glGenBuffers(1, &particleVBO);
+        glBindVertexArray(particleVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+        // initial buffer size big enough
+        glBufferData(GL_ARRAY_BUFFER, 100000 * 3 * sizeof(float), NULL,
+                     GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                              (void *)0);
+        glBindVertexArray(0);
       }
-    }
 
-    if (!particlePositions.empty()) {
-      glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
-      glBufferSubData(GL_ARRAY_BUFFER, 0,
-                      particlePositions.size() * sizeof(float),
-                      particlePositions.data());
+      std::vector<float> particlePositions;
+      for (const auto &p : steamEngine.getParticles()) {
+        if (p.active) {
+          particlePositions.push_back(p.position[0]);
+          particlePositions.push_back(p.position[1]);
+          particlePositions.push_back(p.position[2]);
+        }
+      }
 
-      glUseProgram(shaderProgram);
-      glm_mat4_identity(model);
-      glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
-      // Cyan color for steam particles
-      glUniform3f(colorLoc, 0.0f, 1.0f, 1.0f);
+      if (!particlePositions.empty()) {
+        glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+        // Ensure buffer is large enough if we exceeded initial guess (simple
+        // realloc logic could go here) For now assuming 100k limit logic holds
+        // or is sufficient for demo
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        particlePositions.size() * sizeof(float),
+                        particlePositions.data());
 
-      glBindVertexArray(particleVAO);
-      glPointSize(5.0f); // Make them visible
-      glDrawArrays(GL_POINTS, 0, particlePositions.size() / 3);
-      glBindVertexArray(0);
-      glPointSize(1.0f); // Reset
+        glUseProgram(shaderProgram);
+        glm_mat4_identity(model);
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
+        // Cyan color for steam particles
+        glUniform3f(colorLoc, 0.0f, 1.0f, 1.0f);
+
+        glBindVertexArray(particleVAO);
+        glPointSize(5.0f); // Make them visible
+        glDrawArrays(GL_POINTS, 0, particlePositions.size() / 3);
+        glBindVertexArray(0);
+        glPointSize(1.0f); // Reset
+      }
     }
 
     /* Volumetric Render Disabled for Particle Debug
@@ -341,45 +393,75 @@ int main() {
     glDisable(GL_BLEND);
     */
 
-    /*
-    // [NEW] Draw Volumetric Steam
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(volShader);
+    // [NEW] Draw Volumetric Steam (If NOT Debug Mode)
+    if (!debugMode) {
+      // [TODO] Re-enable/Implement full volumetric path here if desired
+      // For now, ensuring we don't crash or run empty shader code.
+      // User requested toggle.
+      // Logic for volumetric rendering:
+      // 1. Update DensityVolume from particles
+      densityVolume.Clear();
+      for (const auto &p : steamEngine.getParticles()) {
+        if (p.active) {
+          // Map world pos to grid.
+          // World: -15 to 15? Grid: 0 to 64
+          // Need a mapping function/logic.
+          // For now, let's just stick to the particles until DensityVolume is
+          // fully connected.
+        }
+      }
 
-    glm_mat4_identity(model);
-    glm_scale(model,
-              (vec3){15.0f, 15.0f,
-                     15.0f}); // Scale to room size (radius 15 -> 30 width)
+      // Temporarily, let's keep the block commented out or minimal until
+      // DensityVolume is verified connected to avoid "Red Screen" if texture is
+      // empty. Or we can just enable the *code* but since densityVolume isn't
+      // populated it might be invisible.
 
-    glUniformMatrix4fv(glGetUniformLocation(volShader, "model"), 1, GL_FALSE,
-                       (float *)model);
-    glUniformMatrix4fv(glGetUniformLocation(volShader, "view"), 1, GL_FALSE,
-                       (float *)view);
-    glUniformMatrix4fv(glGetUniformLocation(volShader, "projection"), 1,
-                       GL_FALSE, (float *)projection);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUseProgram(volShader);
 
-    glUniform3f(glGetUniformLocation(volShader, "viewPos"), camera.Position[0],
-                camera.Position[1], camera.Position[2]);
-    glUniform3f(glGetUniformLocation(volShader, "boxMin"), -15.0f, -15.0f,
-                -15.0f);
-    glUniform3f(glGetUniformLocation(volShader, "boxMax"), 15.0f, 15.0f, 15.0f);
+      glm_mat4_identity(model);
+      glm_scale(model,
+                (vec3){15.0f, 15.0f,
+                       15.0f}); // Scale to room size (radius 15 -> 30 width)
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_3D, volTexture);
-    glUniform1i(glGetUniformLocation(volShader, "densityTex"), 0);
+      glUniformMatrix4fv(glGetUniformLocation(volShader, "model"), 1, GL_FALSE,
+                         (float *)model);
+      glUniformMatrix4fv(glGetUniformLocation(volShader, "view"), 1, GL_FALSE,
+                         (float *)view);
+      glUniformMatrix4fv(glGetUniformLocation(volShader, "projection"), 1,
+                         GL_FALSE, (float *)projection);
 
-    // Render Cube for Ray Marching Bounds
-    glBindVertexArray(cubeVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
-    glBindVertexArray(0);
+      glUniform3f(glGetUniformLocation(volShader, "viewPos"),
+                  camera.Position[0], camera.Position[1], camera.Position[2]);
+      glUniform3f(glGetUniformLocation(volShader, "boxMin"), -15.0f, -15.0f,
+                  -15.0f);
+      glUniform3f(glGetUniformLocation(volShader, "boxMax"), 15.0f, 15.0f,
+                  15.0f);
 
-    glDisable(GL_BLEND);
-    */
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_3D, volTexture);
+      glUniform1i(glGetUniformLocation(volShader, "densityTex"), 0);
+
+      // Render Cube for Ray Marching Bounds
+      glBindVertexArray(cubeVAO);
+      glDrawArrays(GL_TRIANGLES, 0, 36);
+      glBindVertexArray(0);
+
+      glDisable(GL_BLEND);
+    }
+
+    // Render ImGui
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
     glfwPollEvents();
   }
+
+  ImGui_ImplOpenGL3_Shutdown();
+  ImGui_ImplGlfw_Shutdown();
+  ImGui::DestroyContext();
 
   glfwTerminate();
   return 0;
@@ -389,18 +471,38 @@ void processInput(GLFWwindow *window) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
     glfwSetWindowShouldClose(window, true);
 
-  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-    camera.ProcessKeyboard(FORWARD, deltaTime);
-  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-    camera.ProcessKeyboard(BACKWARD, deltaTime);
-  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-    camera.ProcessKeyboard(LEFT, deltaTime);
-  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-    camera.ProcessKeyboard(RIGHT, deltaTime);
-  if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
-    camera.ProcessKeyboard(UP, deltaTime);
-  if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
-    camera.ProcessKeyboard(DOWN, deltaTime);
+  // [NEW] Toggle Mouse with LEFT ALT
+  static bool altPressed = false;
+  if (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) {
+    if (!altPressed) {
+      cameraEnabled = !cameraEnabled;
+      if (cameraEnabled) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        firstMouse = true; // Reset to avoid jump
+      } else {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+      }
+      altPressed = true;
+    }
+  } else {
+    altPressed = false;
+  }
+
+  // Only move camera if enabled
+  if (cameraEnabled) {
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+      camera.ProcessKeyboard(FORWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+      camera.ProcessKeyboard(BACKWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+      camera.ProcessKeyboard(LEFT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+      camera.ProcessKeyboard(RIGHT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
+      camera.ProcessKeyboard(UP, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
+      camera.ProcessKeyboard(DOWN, deltaTime);
+  }
 }
 
 void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
@@ -408,6 +510,9 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
 }
 
 void mouse_callback(GLFWwindow *window, double xpos, double ypos) {
+  if (!cameraEnabled)
+    return; // [NEW] Stop camera look if mouse is free
+
   if (firstMouse) {
     lastX = xpos;
     lastY = ypos;

@@ -7,6 +7,8 @@ SteamParticle::SteamParticle()
       active(false) {
   glm_vec3_zero(this->position);
   glm_vec3_zero(this->velocity);
+  glm_vec3_zero(this->angularVelocity);
+  this->currentAngle = 0.0f;
 }
 
 SteamParticle::SteamParticle(vec3 pos, vec3 vel, float m, float d, float p,
@@ -14,6 +16,8 @@ SteamParticle::SteamParticle(vec3 pos, vec3 vel, float m, float d, float p,
     : mass(m), density(d), pressure(p), temperature(t), life(l), active(true) {
   glm_vec3_copy(pos, this->position);
   glm_vec3_copy(vel, this->velocity);
+  glm_vec3_zero(this->angularVelocity);
+  this->currentAngle = 0.0f;
 }
 
 void SteamParticle::update(float dt) {

@@ -40,7 +40,8 @@ void SteamEngine::Update(float deltaTime) {
   // SPH STEPS
   neighborGrid.Build(particlePool);
   CalculateDensityAndPressure();
-  CalculateForces(); // Includes Gravity & Buoyancy
+  CalculateVorticity(); // [NEW] Calculate curl of velocity
+  CalculateForces();    // Includes Gravity & Buoyancy
   Integrate(deltaTime);
 
   // STEAM LOGIC
@@ -84,6 +85,50 @@ void SteamEngine::CalculateDensityAndPressure() {
     // 3. Compute Pressure (Ideal Gas Law: P = k * rho * T)
     p.density = std::max(p.density, 0.001f);
     p.pressure = gasConstant * p.density * p.temperature;
+  }
+}
+
+// [NEW] Calculate Vorticity (Curl of Velocity)
+void SteamEngine::CalculateVorticity() {
+  for (size_t i = 0; i < particlePool.size(); i++) {
+    SteamParticle &p = particlePool[i];
+    if (!p.active)
+      continue;
+
+    glm_vec3_zero(p.angularVelocity);
+
+    std::vector<int> neighbors = neighborGrid.GetNeighbors(p.position);
+
+    for (int j : neighbors) {
+      SteamParticle &n = particlePool[j];
+      if (!n.active)
+        continue;
+
+      vec3 distVec;
+      glm_vec3_sub(p.position, n.position, distVec);
+      float r = glm_vec3_norm(distVec);
+
+      if (r > 0.0001f && r < Kernel::h) {
+        // 1. Velocity Difference
+        vec3 v_diff;
+        glm_vec3_sub(n.velocity, p.velocity, v_diff);
+
+        // 2. Kernel Gradient (Spiky Gradient)
+        vec3 gradW;
+        Kernel::SpikyGrad(distVec, r, gradW);
+
+        // 3. Cross Product: (v_diff) x (gradW)
+        vec3 crossProd;
+        glm_vec3_cross(v_diff, gradW, crossProd);
+
+        // 4. Accumulate: Mass * Cross / Density
+        float scalar = n.mass / (n.density + 0.0001f);
+
+        vec3 term;
+        glm_vec3_scale(crossProd, scalar, term);
+        glm_vec3_add(p.angularVelocity, term, p.angularVelocity);
+      }
+    }
   }
 }
 
@@ -134,6 +179,29 @@ void SteamEngine::CalculateForces() {
         glm_vec3_add(p.force, forceP, p.force);
       }
     }
+
+    // 4. [NEW] Vorticity Confinement (Swirl Force)
+    // Epsilon controls how "swirly" the steam is.
+    float epsilon = 0.5f;
+
+    // 1. Calculate magnitude of vorticity (how fast we are spinning)
+    float omegaLen = glm_vec3_norm(p.angularVelocity);
+
+    // 2. Cheap "Curl Noise" Hack: Push perpendicular to velocity and spin axis
+    if (omegaLen > 0.0001f) {
+      vec3 N;
+      // Normalize vorticity to get axis of rotation
+      glm_vec3_scale(p.angularVelocity, 1.0f / omegaLen, N);
+
+      // 3. Force = epsilon * |Omega| * (N x v)
+      // This pushes the particle perpendicular to its motion, curving it.
+      vec3 swirlDir;
+      glm_vec3_cross(N, p.velocity, swirlDir);
+
+      glm_vec3_scale(swirlDir, epsilon * omegaLen, swirlDir);
+
+      glm_vec3_add(p.force, swirlDir, p.force);
+    }
   }
 }
 
@@ -159,6 +227,12 @@ void SteamEngine::Integrate(float deltaTime) {
     vec3 dx;
     glm_vec3_scale(p.velocity, deltaTime, dx);
     glm_vec3_add(p.position, dx, p.position);
+
+    // [NEW] Update Angle for rendering (if we had rotating sprites)
+    // Magnitude of the angular velocity vector is the speed of rotation
+    // (radians/sec)
+    float rotationSpeed = glm_vec3_norm(p.angularVelocity);
+    p.currentAngle += rotationSpeed * deltaTime;
 
     // Simple Floor Collision
     // Floor is at y = -15.0f
@@ -222,6 +296,10 @@ void SteamEngine::SpawnParticles(float deltaTime) {
 
       glm_vec3_zero(p.velocity);
       p.velocity[1] = 0.5f;
+
+      // Zero out initial spin, it will be calculated by Vorticity
+      glm_vec3_zero(p.angularVelocity);
+      p.currentAngle = 0.0f;
     }
   }
 }

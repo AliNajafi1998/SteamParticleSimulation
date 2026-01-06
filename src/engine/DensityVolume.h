@@ -22,6 +22,8 @@ public:
   // Get raw data for texture upload
   const std::vector<float> &getData() const;
 
+  void Clear(); // Moved to public
+
 private:
   int width, height, depth;
   float cellWidth, cellHeight, cellDepth;
@@ -33,10 +35,10 @@ private:
   // size? Room is 30 wide, 30 deep, 30 high. Let's cover the Kurna area
   // specifically or the whole room? User wants "Volumetric Ray Marching",
   // covering the whole room is simpler for bounds.
+  // Bounds (for coordinate mapping)
+  // Bounds (for coordinate mapping)
   vec3 minBounds;
   vec3 maxBounds;
-
-  void Clear();
 };
 
 #endif
