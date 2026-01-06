@@ -235,7 +235,7 @@ void SteamEngine::Integrate(float deltaTime) {
     p.currentAngle += rotationSpeed * deltaTime;
 
     // Simple Floor Collision
-    // Floor is at y = -15.0f
+    // Floor is at y = -15.0f (Height 30)
     if (p.position[1] < -15.0f) {
       p.position[1] = -15.0f;
       p.velocity[1] *= -0.5f;

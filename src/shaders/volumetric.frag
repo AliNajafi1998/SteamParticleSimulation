@@ -10,6 +10,8 @@ uniform sampler3D densityTex;
 
 uniform float stepSize; // Step size for ray marching
 // const float STEP_SIZE = 0.5; // [REPLACED]
+uniform float dispersionStrength; // [NEW] Dispersion Strength
+uniform vec3 lightPos; // [NEW] Light Position for Self Radiance
 const int MAX_STEPS = 128;
 
 // --- NOISE FUNCTIONS ---
@@ -84,31 +86,96 @@ void main()
     vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
     float currentDist = tStart;
     
-    float totalDensity = 0.0;
+    // [NEW] Chromatic Dispersion
+    // Instead of one density, we accumulate a spectral color.
+    vec3 totalColor = vec3(0.0);
+    vec3 totalAlpha = vec3(0.0); // Transmissivity per channel? 
+    // Simplified: Just accumulate density per channel.
+    vec3 accumulatedDensity = vec3(0.0);
+    
+    // Dispersion factor: How much the channels separate
+    // We can use stepSize to keep it relative to integration
+    float dispersion = dispersionStrength; 
     
     int steps = 0;
     while (currentDist < tEnd && steps < MAX_STEPS) {
         // Map position to UVW [0, 1]
-        vec3 uvw = (currentPos - boxMin) / (boxMax - boxMin);
+        // Center (Green)
+        vec3 uvwG = (currentPos - boxMin) / (boxMax - boxMin);
         
-        // Sampling
-        if(uvw.x >= 0.0 && uvw.x <= 1.0 && 
-           uvw.y >= 0.0 && uvw.y <= 1.0 && 
-           uvw.z >= 0.0 && uvw.z <= 1.0) {
-            
-            float baseDensity = texture(densityTex, uvw).r;
-            
-            if (baseDensity > 0.01) {
-                // Apply FBM Noise to erode/detail the density
-                // Higher frequency (e.g. 1.5) provides structure
-                float noiseVal = fbm(currentPos * 1.5); 
+        // Red (Offset forward/outward)
+        vec3 posR = currentPos + viewDir * dispersion;
+        vec3 uvwR = (posR - boxMin) / (boxMax - boxMin);
+        
+        // Blue (Offset backward/inward)
+        vec3 posB = currentPos - viewDir * dispersion;
+        vec3 uvwB = (posB - boxMin) / (boxMax - boxMin);
+        
+        // --- LIGHT MARCHING (Self-Shadowing) ---
+        // For the center sample (Green/Primary), calculate how much light reaches this point.
+        if (accumulatedDensity.g < 5.0) { // Optimization: Don't light if already opaque
+             vec3 lightDir = normalize(lightPos - currentPos); 
+             // vec3 lightPos = currentPos + lightDir * 0.1; // Rename local variable to avoid conflict
+             vec3 shadowRayPos = currentPos + lightDir * 0.1;
+             
+             float lightDensity = 0.0;
+             
+             // March towards light
+             for (int l = 0; l < 4; l++) { 
+                 vec3 lUVW = (shadowRayPos - boxMin) / (boxMax - boxMin);
+                 if(lUVW.x >= 0.0 && lUVW.x <= 1.0 && lUVW.y >= 0.0 && lUVW.y <= 1.0 && lUVW.z >= 0.0 && lUVW.z <= 1.0) {
+                     float ld = texture(densityTex, lUVW).r;
+                     lightDensity += ld * 0.5; 
+                 }
+                 shadowRayPos += lightDir * 0.5; 
+             }
+             
+             float lightTransmittance = exp(-lightDensity * 2.0); // Darkness multiplier
+             
+             // Tweak: Add ambient light so it's not pitch black
+             vec3 lightColor = vec3(1.0) * (lightTransmittance * 0.7 + 0.3);
+             
+             // Accumulate this light into the color
+             // Simple interaction: Density * Light
+             // Note: This is an approximation. True scattering is complex.
+             // We apply this lighting factor to the density we just accumulated.
+             
+             // Re-weighting the color accumulation based on light
+             totalColor += accumulatedDensity * stepSize * lightColor; 
+        }
+
+        // --- GREEN SAMPLE (Center) ---
+        if(uvwG.x >= 0.0 && uvwG.x <= 1.0 && uvwG.y >= 0.0 && uvwG.y <= 1.0 && uvwG.z >= 0.0 && uvwG.z <= 1.0) {
+            float d = texture(densityTex, uvwG).r;
+            if (d > 0.01) {
+                float n = fbm(currentPos * 1.5);
+                float densityContribution = d * (n * 1.5) * stepSize;
+                accumulatedDensity.g += densityContribution;
                 
-                // Modulate: 
-                // We want to carve out shapes, so multiply by noise.
-                // We can also bias it so thick parts stay thick.
-                float detailDensity = baseDensity * (noiseVal * 1.5); 
-                
-                totalDensity += detailDensity * stepSize;
+                // Hacky Integration of Light into Alpha
+                // We really should accumulate Color and Alpha separately.
+                // Let's assume white steam for now, dimmed by shadow.
+                // We'll store the "Shadowed Density" in the Green channel for now to visualize it?
+                // No, let's keep it simple first: just modify the alpha/density accumulation?
+                // Actually, let's just use the shadow to darken the final output.
+            }
+        }
+        
+        // --- RED SAMPLE ---
+        if(uvwR.x >= 0.0 && uvwR.x <= 1.0 && uvwR.y >= 0.0 && uvwR.y <= 1.0 && uvwR.z >= 0.0 && uvwR.z <= 1.0) {
+            float d = texture(densityTex, uvwR).r;
+            if (d > 0.01) {
+                float n = fbm(posR * 1.5);
+                accumulatedDensity.r += d * (n * 1.5) * stepSize;
+            }
+        }
+        
+        // --- BLUE SAMPLE ---
+        if(uvwB.x >= 0.0 && uvwB.x <= 1.0 && uvwB.y >= 0.0 && uvwB.y <= 1.0 && uvwB.z >= 0.0 && uvwB.z <= 1.0) {
+            float d = texture(densityTex, uvwB).r;
+            if (d > 0.01) {
+                float n = fbm(posB * 1.5);
+                accumulatedDensity.b += d * (n * 1.5) * stepSize;
             }
         }
         
@@ -116,13 +183,29 @@ void main()
         currentDist += stepSize;
         steps++;
         
-        // Early exit if saturated?
-        if (totalDensity > 5.0) break;
+        if (accumulatedDensity.g > 5.0) break;
     }
     
-    float alpha = 1.0 - exp(-totalDensity * 0.5); // Beer's Law simple approx
+    // Beer's Law for each channel
+    vec3 transmission = exp(-accumulatedDensity * 0.5);
+    vec3 alpha = 1.0 - transmission;
+
+    // Approximated Light Color (Global average for now, better would be per-pixel integration)
+    // Since we didn't fully integrate light in the loop (to keep it simple in the snippet above),
+    // let's do a trick: Darken the bottom/dense parts based on total density.
+    float shadowFactor = exp(-accumulatedDensity.g * 0.8);
     
-    if (alpha < 0.01) discard;
+    // [TUNED] Make shadows brighter (0.8 floor) - Lighter Steam
+    vec3 finalLight = vec3(1.0) * (shadowFactor * 0.2 + 0.8); 
+
+    // Output
+    // [TUNED] Color: Brighter White/Blueish
+    vec3 steamColor = vec3(1.2, 1.25, 1.3); // Overdrive > 1.0 for "glowing" white feel
+    FragColor = vec4(finalLight * steamColor, alpha.g); 
     
-    FragColor = vec4(1.0, 1.0, 1.0, alpha); // White steam
+    // Mix dispersion
+    vec3 dispersionColor = vec3(alpha.r, alpha.g, alpha.b);
+    FragColor.rgb = mix(FragColor.rgb, dispersionColor, dispersionStrength * 5.0); // Boost dispersion visual
+
+    if (FragColor.a < 0.01) discard;
 }

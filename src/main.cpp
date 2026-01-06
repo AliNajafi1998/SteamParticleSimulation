@@ -83,7 +83,7 @@ int main() {
       createShader("src/shaders/simple.vert", "src/shaders/simple.frag");
 
   // Initialize Room (Width, Height, Depth)
-  Room room(30.0f, 30.0f, 30.0f);
+  Room room(50.0f, 30.0f, 50.0f); // [RESIZED] Width/Depth 50, Height 30
   room.setTemperature(25.0f);
 
   // Initialize Kurna (Radius, Height)
@@ -308,7 +308,8 @@ int main() {
 
     // Draw Kurna (Marble White/Grey)
     glUniform3f(colorLoc, 0.9f, 0.9f, 0.9f);
-    glm_translate(model, (vec3){0.0f, -15.0f, 0.0f});
+    glm_translate(
+        model, (vec3){0.0f, -15.0f, 0.0f}); // [REVERTED] Floor is back at -15
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
     kurna.draw();
 
@@ -426,8 +427,7 @@ int main() {
 
       glm_mat4_identity(model);
       glm_scale(model,
-                (vec3){15.0f, 15.0f,
-                       15.0f}); // Scale to room size (radius 15 -> 30 width)
+                (vec3){25.0f, 15.0f, 25.0f}); // Scale to room size (50x30x50)
 
       glUniformMatrix4fv(glGetUniformLocation(volShader, "model"), 1, GL_FALSE,
                          (float *)model);
@@ -438,10 +438,13 @@ int main() {
 
       glUniform3f(glGetUniformLocation(volShader, "viewPos"),
                   camera.Position[0], camera.Position[1], camera.Position[2]);
-      glUniform3f(glGetUniformLocation(volShader, "boxMin"), -15.0f, -15.0f,
-                  -15.0f);
-      glUniform3f(glGetUniformLocation(volShader, "boxMax"), 15.0f, 15.0f,
-                  15.0f);
+      glUniform3f(glGetUniformLocation(volShader, "boxMin"), -25.0f, -15.0f,
+                  -25.0f);
+      glUniform3f(glGetUniformLocation(volShader, "boxMax"), 25.0f, 15.0f,
+                  25.0f);
+      // Pass Light Pos (Top Center)
+      glUniform3f(glGetUniformLocation(volShader, "lightPos"), 0.0f, 15.0f,
+                  0.0f);
 
       // Pass Step Size
       glUniform1f(glGetUniformLocation(volShader, "stepSize"), rayStepSize);
