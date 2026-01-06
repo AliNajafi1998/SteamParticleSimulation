@@ -8,8 +8,40 @@ uniform vec3 boxMin; // e.g. -15, -15, -15
 uniform vec3 boxMax; // e.g. 15, 15, 15
 uniform sampler3D densityTex;
 
-const float STEP_SIZE = 0.5; // Step size for ray marching
+uniform float stepSize; // Step size for ray marching
+// const float STEP_SIZE = 0.5; // [REPLACED]
 const int MAX_STEPS = 128;
+
+// --- NOISE FUNCTIONS ---
+// Simple Hash
+float hash(float n) { return fract(sin(n) * 43758.5453123); }
+
+// 3D Noise (Simple Value Noise)
+float noise(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    
+    float n = p.x + p.y * 57.0 + p.z * 113.0;
+    
+    return mix(mix(mix( hash(n + 0.0), hash(n + 1.0), f.x),
+                   mix( hash(n + 57.0), hash(n + 58.0), f.x), f.y),
+               mix(mix( hash(n + 113.0), hash(n + 114.0), f.x),
+                   mix( hash(n + 170.0), hash(n + 171.0), f.x), f.y), f.z);
+}
+
+// Fractal Brownian Motion
+float fbm(vec3 x) {
+    float v = 0.0;
+    float a = 0.5;
+    vec3 shift = vec3(100.0);
+    for (int i = 0; i < 4; ++i) { // 4 Octaves
+        v += a * noise(x);
+        x = x * 2.0 + shift;
+        a *= 0.5;
+    }
+    return v;
+}
 
 // Function to calculate ray-box intersection
 // Returns distance to entry (tNear) and exit (tFar)
@@ -46,7 +78,10 @@ void main()
     float tStart = max(t.x, 0.0);
     float tEnd = t.y;
     
-    vec3 currentPos = viewPos + viewDir * tStart;
+    // Jitter start position to break up banding
+    // [USER SUGGESTION] Random ray offset
+    float randomOffset = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
     float currentDist = tStart;
     
     float totalDensity = 0.0;
@@ -61,12 +96,24 @@ void main()
            uvw.y >= 0.0 && uvw.y <= 1.0 && 
            uvw.z >= 0.0 && uvw.z <= 1.0) {
             
-            float d = texture(densityTex, uvw).r;
-            totalDensity += d * STEP_SIZE;
+            float baseDensity = texture(densityTex, uvw).r;
+            
+            if (baseDensity > 0.01) {
+                // Apply FBM Noise to erode/detail the density
+                // Higher frequency (e.g. 1.5) provides structure
+                float noiseVal = fbm(currentPos * 1.5); 
+                
+                // Modulate: 
+                // We want to carve out shapes, so multiply by noise.
+                // We can also bias it so thick parts stay thick.
+                float detailDensity = baseDensity * (noiseVal * 1.5); 
+                
+                totalDensity += detailDensity * stepSize;
+            }
         }
         
-        currentPos += viewDir * STEP_SIZE;
-        currentDist += STEP_SIZE;
+        currentPos += viewDir * stepSize;
+        currentDist += stepSize;
         steps++;
         
         // Early exit if saturated?

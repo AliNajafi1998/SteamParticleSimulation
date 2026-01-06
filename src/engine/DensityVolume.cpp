@@ -40,28 +40,45 @@ void DensityVolume::Build(const std::vector<SteamParticle> &particles) {
     if (!p.isActive())
       continue;
 
-    // Map position to grid index
-    // Relative pos
-    float rx = p.position[0] - minBounds[0];
-    float ry = p.position[1] - minBounds[1];
-    float rz = p.position[2] - minBounds[2];
+    // 1. Normalized Grid Coordinates (Float)
+    float fx = (p.position[0] - minBounds[0]) / cellWidth;
+    float fy = (p.position[1] - minBounds[1]) / cellHeight;
+    float fz = (p.position[2] - minBounds[2]) / cellDepth;
 
-    // integer init coords
-    int ix = (int)(rx / cellWidth);
-    int iy = (int)(ry / cellHeight);
-    int iz = (int)(rz / cellDepth);
+    // 2. Base Index (Floor)
+    int ix = (int)std::floor(fx - 0.5f);
+    int iy = (int)std::floor(fy - 0.5f);
+    int iz = (int)std::floor(fz - 0.5f);
 
-    // Bounds check
-    if (ix < 0 || ix >= width || iy < 0 || iy >= height || iz < 0 ||
-        iz >= depth)
-      continue;
+    // 3. Fractional Offsets (Weights)
+    float dx = fx - 0.5f - ix;
+    float dy = fy - 0.5f - iy;
+    float dz = fz - 0.5f - iz;
 
-    // Linear index
-    int index = iz * width * height + iy * width + ix;
+    // 4. Distribute to 8 neighbors
+    for (int k = 0; k < 2; k++) {
+      for (int j = 0; j < 2; j++) {
+        for (int i = 0; i < 2; i++) {
 
-    // Add density - could weigh by particle mass or density property
-    // data[index] += p.density; // Or just const amount
-    data[index] += 0.5f; // Accumulate basic density
+          int nx = ix + i;
+          int ny = iy + j;
+          int nz = iz + k;
+
+          // Bounds check
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 ||
+              nz >= depth)
+            continue;
+
+          // Calculate weight (Trilinear)
+          float weight = (i * dx + (1 - i) * (1 - dx)) *
+                         (j * dy + (1 - j) * (1 - dy)) *
+                         (k * dz + (1 - k) * (1 - dz));
+
+          int idx = nz * width * height + ny * width + nx;
+          data[idx] += 0.2f * weight; // [TUNED] Scaled amount for smoothness
+        }
+      }
+    }
   }
 }
 

@@ -192,6 +192,10 @@ int main() {
     ImGui::SliderFloat("Emission Rate", &steamEngine.emissionRate, 10.0f,
                        1000.0f);
 
+    // [NEW] Ray Marching Step Size
+    static float rayStepSize = 0.5f;
+    ImGui::SliderFloat("Ray Step Size", &rayStepSize, 0.05f, 2.0f);
+
     ImGui::End();
 
     // Make sure to propagate ImGui input capture to camera?
@@ -438,6 +442,9 @@ int main() {
                   -15.0f);
       glUniform3f(glGetUniformLocation(volShader, "boxMax"), 15.0f, 15.0f,
                   15.0f);
+
+      // Pass Step Size
+      glUniform1f(glGetUniformLocation(volShader, "stepSize"), rayStepSize);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_3D, volTexture);
