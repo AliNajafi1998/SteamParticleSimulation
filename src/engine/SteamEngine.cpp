@@ -5,12 +5,17 @@
 
 SteamEngine::SteamEngine() {
   // Initialization
-  gravity = -9.8f;
-  buoyancyCoeff = 1.5f;
-  coolingRate = 0.5f;
+  // Gravity: Reduced from -9.8 to -0.5 to simulate air resistance/buoyancy
+  gravity = -0.5f;
+  // Buoyancy: Increased to ensure lift > gravity.
+  // Acceleration = (Lift + Gravity) / Mass.
+  // If Temp=1, Lift=4.0. Net Y Accel = 3.5.
+  buoyancyCoeff = 4.0f;
+
+  coolingRate =
+      0.3f; // Slight reduction to let them rise higher before losing lift
   gasConstant = 2.0f;
-  ambientTemperature =
-      0.0f; // Assuming 0 is the baseline for now, or match room?
+  ambientTemperature = 0.0f;
 }
 
 SteamEngine::~SteamEngine() {
@@ -156,8 +161,9 @@ void SteamEngine::Integrate(float deltaTime) {
     glm_vec3_add(p.position, dx, p.position);
 
     // Simple Floor Collision
-    if (p.position[1] < 0.0f) {
-      p.position[1] = 0.0f;
+    // Floor is at y = -15.0f
+    if (p.position[1] < -15.0f) {
+      p.position[1] = -15.0f;
       p.velocity[1] *= -0.5f;
     }
   }

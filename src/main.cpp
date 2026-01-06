@@ -15,6 +15,7 @@ const unsigned int SCR_HEIGHT = 720;
 
 // Camera
 #include "camera/Camera.h"
+#include "engine/DensityVolume.h" // [NEW] Volumetric
 #include "engine/SteamEngine.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_glfw.h"
@@ -87,9 +88,61 @@ int main() {
   // Initialize Kurna (Radius, Height)
   Kurna kurna(2.0f, 1.0f);
 
+  // [NEW] Volumetric Texture setup
+  DensityVolume densityVolume(64, 64, 64);
+  unsigned int volTexture;
+  glGenTextures(1, &volTexture);
+  glBindTexture(GL_TEXTURE_3D, volTexture);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  // Initial empty upload to define format
+  int dw, dh, dd;
+  densityVolume.getParams(&dw, &dh, &dd);
+  glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, dw, dh, dd, 0, GL_RED, GL_FLOAT,
+               NULL);
+  glBindTexture(GL_TEXTURE_3D, 0);
+
+  // Volumetric Shader
+  unsigned int volShader = createShader("src/shaders/volumetric.vert",
+                                        "src/shaders/volumetric.frag");
+
+  // Volume Cube VAO (Simple cube -1 to 1)
+  float cubeVertices[] = {
+      // positions
+      -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f,
+      1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f,
+
+      -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f,
+      -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,
+
+      1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f,
+
+      -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,
+
+      -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f,
+
+      -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
+      1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
+  unsigned int cubeVAO, cubeVBO;
+  glGenVertexArrays(1, &cubeVAO);
+  glGenBuffers(1, &cubeVBO);
+  glBindVertexArray(cubeVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(cubeVertices), cubeVertices,
+               GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
+  glBindVertexArray(0);
+
   // Initialize Steam Engine
   SteamEngine steamEngine;
-  steamEngine.Initialize(2000); // Start with capacity for 2000 particles
+  steamEngine.Initialize(2000000); // Start with capacity for 2000 particles
 
   // Render Loop
   while (!glfwWindowShouldClose(window)) {
@@ -102,6 +155,14 @@ int main() {
 
     // Update Steam Simulation
     steamEngine.Update(deltaTime);
+
+    // [NEW] Update Density Volume
+    densityVolume.Build(steamEngine.getParticles());
+    const auto &volData = densityVolume.getData();
+    glBindTexture(GL_TEXTURE_3D, volTexture);
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, dw, dh, dd, GL_RED, GL_FLOAT,
+                    volData.data());
+    glBindTexture(GL_TEXTURE_3D, 0);
 
     // DEBUG: Print status every 1 second
     static float debugTimer = 0.0f;
@@ -198,6 +259,123 @@ int main() {
     glm_translate(model, (vec3){0.0f, -15.0f, 0.0f});
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
     kurna.draw();
+
+    // [NEW] Render Particles as Points
+    // Create VAO/VBO on first run (lazy init for simplicity in this loop or
+    // global)
+    static unsigned int particleVAO = 0;
+    static unsigned int particleVBO = 0;
+    if (particleVAO == 0) {
+      glGenVertexArrays(1, &particleVAO);
+      glGenBuffers(1, &particleVBO);
+      glBindVertexArray(particleVAO);
+      glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+      // initial buffer size
+      glBufferData(GL_ARRAY_BUFFER, 2000 * 3 * sizeof(float), NULL,
+                   GL_DYNAMIC_DRAW);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                            (void *)0);
+      glBindVertexArray(0);
+    }
+
+    std::vector<float> particlePositions;
+    for (const auto &p : steamEngine.getParticles()) {
+      if (p.active) {
+        particlePositions.push_back(p.position[0]);
+        particlePositions.push_back(p.position[1]);
+        particlePositions.push_back(p.position[2]);
+      }
+    }
+
+    if (!particlePositions.empty()) {
+      glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+      glBufferSubData(GL_ARRAY_BUFFER, 0,
+                      particlePositions.size() * sizeof(float),
+                      particlePositions.data());
+
+      glUseProgram(shaderProgram);
+      glm_mat4_identity(model);
+      glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
+      // Cyan color for steam particles
+      glUniform3f(colorLoc, 0.0f, 1.0f, 1.0f);
+
+      glBindVertexArray(particleVAO);
+      glPointSize(5.0f); // Make them visible
+      glDrawArrays(GL_POINTS, 0, particlePositions.size() / 3);
+      glBindVertexArray(0);
+      glPointSize(1.0f); // Reset
+    }
+
+    /* Volumetric Render Disabled for Particle Debug
+    // [NEW] Draw Volumetric Steam
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(volShader);
+
+    glm_mat4_identity(model);
+    glm_scale(model, (vec3){15.0f, 15.0f, 15.0f}); // Scale to room size (radius
+    15 -> 30 width)
+
+    glUniformMatrix4fv(glGetUniformLocation(volShader, "model"), 1, GL_FALSE,
+    (float *)model); glUniformMatrix4fv(glGetUniformLocation(volShader, "view"),
+    1, GL_FALSE, (float *)view);
+    glUniformMatrix4fv(glGetUniformLocation(volShader, "projection"), 1,
+    GL_FALSE, (float *)projection);
+
+    glUniform3f(glGetUniformLocation(volShader, "viewPos"), camera.Position[0],
+    camera.Position[1], camera.Position[2]);
+    glUniform3f(glGetUniformLocation(volShader, "boxMin"), -15.0f, -15.0f,
+    -15.0f); glUniform3f(glGetUniformLocation(volShader,
+    "boxMax"), 15.0f, 15.0f, 15.0f);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, volTexture);
+    glUniform1i(glGetUniformLocation(volShader, "densityTex"), 0);
+
+    // Render Cube for Ray Marching Bounds
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+
+    glDisable(GL_BLEND);
+    */
+
+    /*
+    // [NEW] Draw Volumetric Steam
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(volShader);
+
+    glm_mat4_identity(model);
+    glm_scale(model,
+              (vec3){15.0f, 15.0f,
+                     15.0f}); // Scale to room size (radius 15 -> 30 width)
+
+    glUniformMatrix4fv(glGetUniformLocation(volShader, "model"), 1, GL_FALSE,
+                       (float *)model);
+    glUniformMatrix4fv(glGetUniformLocation(volShader, "view"), 1, GL_FALSE,
+                       (float *)view);
+    glUniformMatrix4fv(glGetUniformLocation(volShader, "projection"), 1,
+                       GL_FALSE, (float *)projection);
+
+    glUniform3f(glGetUniformLocation(volShader, "viewPos"), camera.Position[0],
+                camera.Position[1], camera.Position[2]);
+    glUniform3f(glGetUniformLocation(volShader, "boxMin"), -15.0f, -15.0f,
+                -15.0f);
+    glUniform3f(glGetUniformLocation(volShader, "boxMax"), 15.0f, 15.0f, 15.0f);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, volTexture);
+    glUniform1i(glGetUniformLocation(volShader, "densityTex"), 0);
+
+    // Render Cube for Ray Marching Bounds
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+
+    glDisable(GL_BLEND);
+    */
 
     glfwSwapBuffers(window);
     glfwPollEvents();
