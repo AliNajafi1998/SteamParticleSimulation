@@ -270,7 +270,6 @@ void SteamEngine::SpawnParticles(float deltaTime) {
   static float timeAccumulator = 0.0f;
   timeAccumulator += deltaTime;
 
-  float emissionRate = 200.0f; // Increased rate as optimization allows more
   float interval = 1.0f / emissionRate;
 
   while (timeAccumulator > interval) {
