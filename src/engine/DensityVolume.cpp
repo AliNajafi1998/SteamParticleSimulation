@@ -45,37 +45,41 @@ void DensityVolume::Build(const std::vector<SteamParticle> &particles) {
     float fy = (p.position[1] - minBounds[1]) / cellHeight;
     float fz = (p.position[2] - minBounds[2]) / cellDepth;
 
-    // 2. Base Index (Floor)
-    int ix = (int)std::floor(fx - 0.5f);
-    int iy = (int)std::floor(fy - 0.5f);
-    int iz = (int)std::floor(fz - 0.5f);
+    // [NEW] Gaussian Splatting (3x3x3)
+    // Center voxel indices (nearest integer)
+    int cx = (int)(fx + 0.5f);
+    int cy = (int)(fy + 0.5f);
+    int cz = (int)(fz + 0.5f);
 
-    // 3. Fractional Offsets (Weights)
-    float dx = fx - 0.5f - ix;
-    float dy = fy - 0.5f - iy;
-    float dz = fz - 0.5f - iz;
+    // Loop over 3x3x3 block
+    for (int k = -1; k <= 1; k++) {
+      for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
 
-    // 4. Distribute to 8 neighbors
-    for (int k = 0; k < 2; k++) {
-      for (int j = 0; j < 2; j++) {
-        for (int i = 0; i < 2; i++) {
-
-          int nx = ix + i;
-          int ny = iy + j;
-          int nz = iz + k;
+          int nx = cx + i;
+          int ny = cy + j;
+          int nz = cz + k;
 
           // Bounds check
           if (nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 ||
               nz >= depth)
             continue;
 
-          // Calculate weight (Trilinear)
-          float weight = (i * dx + (1 - i) * (1 - dx)) *
-                         (j * dy + (1 - j) * (1 - dy)) *
-                         (k * dz + (1 - k) * (1 - dz));
+          // Squared distance from particle (fx, fy, fz) to voxel center (nx,
+          // ny, nz)
+          float dx = nx - fx;
+          float dy = ny - fy;
+          float dz = nz - fz;
+          float distSq = dx * dx + dy * dy + dz * dz;
+
+          // Gaussian Falloff
+          // Sigma controls the "blobbiness".
+          // 1.0 means falloff is gradual over 1 cell.
+          float sigma = 1.0f;
+          float weight = std::exp(-distSq / (2.0f * sigma * sigma));
 
           int idx = nz * width * height + ny * width + nx;
-          data[idx] += 0.2f * weight; // [TUNED] Scaled amount for smoothness
+          data[idx] += 0.4f * weight; // [TUNED] Accumulate density
         }
       }
     }
