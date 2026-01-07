@@ -3,11 +3,15 @@ out vec4 FragColor;
 
 in vec3 FragPos;
 in vec3 Normal;
+in vec2 TexCoord;
 
 uniform vec3 objectColor;
 uniform vec3 lightPos;
 uniform vec3 viewPos;
 uniform vec3 lightColor;
+
+uniform sampler2D wallTexture;
+uniform int useTexture; // 1 = use texture, 0 = use objectColor
 
 void main()
 {
@@ -28,6 +32,17 @@ void main()
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
     vec3 specular = specularStrength * spec * lightColor;  
         
-    vec3 result = (ambient + diffuse + specular) * objectColor;
-    FragColor = vec4(result, 1.0);
+    vec3 lighting = (ambient + diffuse + specular);
+    
+    vec4 resultColor;
+    if (useTexture == 1) {
+        vec4 texColor = texture(wallTexture, TexCoord);
+        // Mix texture with a bit of the object color (tint) or just use texture?
+        // Let's multiply lighting by texture
+        resultColor = vec4(lighting, 1.0) * texColor; 
+    } else {
+        resultColor = vec4(lighting * objectColor, 1.0);
+    }
+    
+    FragColor = resultColor;
 }

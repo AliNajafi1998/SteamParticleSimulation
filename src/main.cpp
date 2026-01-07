@@ -24,6 +24,10 @@ const unsigned int SCR_HEIGHT = 720;
 #include "room/Room.h"
 #include <glad/glad.h>
 #include <iostream>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 // Initial position: (0.0f, -10.0f, 40.0f) - Close to floor, outside looking in
 // Up vector: (0.0f, 1.0f, 0.0f)
 // Yaw: -90.0f, Pitch: 0.0f
@@ -86,7 +90,8 @@ int main() {
   Room room(50.0f, 30.0f, 50.0f); // [RESIZED] Width/Depth 50, Height 30
   room.setTemperature(25.0f);
 
-  // Initialize KURWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA (Radius, Height)
+  // Initialize KURWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA (Radius,
+  // Height)
   Kurna kurna(2.0f, 1.0f);
 
   // [NEW] Volumetric Texture setup
@@ -111,6 +116,7 @@ int main() {
 
   bool debugMode =
       true; // Toggle between Particles (True) and Volumetric (False)
+  bool useWallTexture = true; // [NEW] Toggle for Wall Texture
 
   bool pause = false;
 
@@ -195,6 +201,31 @@ int main() {
   SteamEngine steamEngine(spawn_range_multiplier);
   steamEngine.Initialize(2000000); // Start with capacity for 2000 particles
 
+  // [NEW] Load Wall Texture
+  unsigned int wallTexture;
+  glGenTextures(1, &wallTexture);
+  glBindTexture(GL_TEXTURE_2D, wallTexture);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  int width, height, nrChannels;
+  // stbi_set_flip_vertically_on_load(true); // Tell stb_image.h to flip loaded
+  // texture's on the y-axis.
+  unsigned char *data = stbi_load("src/room/textures/marble.jpeg", &width,
+                                  &height, &nrChannels, 0);
+  if (data) {
+    GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format,
+                 GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+  } else {
+    std::cout << "Failed to load texture" << std::endl;
+  }
+  stbi_image_free(data);
+
   // Render Loop
   while (!glfwWindowShouldClose(window)) {
     // Per-frame time logic
@@ -220,6 +251,7 @@ int main() {
     ImGui::Separator();
     ImGui::Checkbox("Debug Mode (Particles)", &debugMode);
     ImGui::Checkbox("Pause Simulation", &pause);
+    ImGui::Checkbox("Use Wall Texture", &useWallTexture);
 
     ImGui::Separator();
     ImGui::Text("Physics Parameters");
@@ -234,8 +266,8 @@ int main() {
     ImGui::SliderFloat("Ray Step Size", &rayStepSize, 0.05f, 2.0f);
 
     // [NEW] Refraction Strength
-    static float refractionStrength = 0.015f;
-    ImGui::SliderFloat("Refraction Strength", &refractionStrength, 0.0f, 2.0f);
+    static float refractionStrength = 0.008f;
+    ImGui::SliderFloat("Refraction Strength", &refractionStrength, 0.0f, 0.1f);
 
     // [NEW] Dispersion Strength
     static float dispersionStrength = 0.01f;
@@ -262,7 +294,8 @@ int main() {
     }
 
     // Update Steam Simulation
-    if (!pause) steamEngine.Update(deltaTime);
+    if (!pause)
+      steamEngine.Update(deltaTime);
 
     // [NEW] Update Density Volume
     densityVolume.Build(steamEngine.getParticles());
@@ -340,8 +373,20 @@ int main() {
 
     // Draw Room
 
+    // Bind Texture
+    glActiveTexture(
+        GL_TEXTURE2); // Use unit 2 to avoid conflict with density(0) and bg(1)
+    glBindTexture(GL_TEXTURE_2D, wallTexture);
+    glUniform1i(glGetUniformLocation(shaderProgram, "wallTexture"), 2);
+
+    // Set UseTexture Uniform
+    unsigned int useTextureLoc =
+        glGetUniformLocation(shaderProgram, "useTexture");
+
     // Wall Back - rgb(120, 99, 130) -> (0.235f, 0.388f, 0.510f)
     glUniform3f(colorLoc, 120.0f / 255.0f, 99.0f / 255.0f, 130.0f / 255.0f);
+    glUniform1i(useTextureLoc,
+                useWallTexture ? 1 : 0); // Enable texture for walls
     room.drawWallBack();
 
     // Wall Front - rgb(96, 163, 188) -> (0.376f, 0.639f, 0.737f)
@@ -350,22 +395,27 @@ int main() {
 
     // Wall Left - rgb(10, 61, 98) -> (0.039f, 0.239f, 0.384f)
     glUniform3f(colorLoc, 10.0f / 255.0f, 61.0f / 255.0f, 98.0f / 255.0f);
+    glUniform1i(useTextureLoc, useWallTexture ? 1 : 0);
     room.drawWallLeft();
 
     // Wall Right - rgb(1, 10, 204) -> (0.416f, 0.537f, 0.800f)
     glUniform3f(colorLoc, 1.0f / 255.0f, 10.0f / 255.0f, 204.0f / 255.0f);
+    glUniform1i(useTextureLoc, useWallTexture ? 1 : 0);
     room.drawWallRight();
 
     // Floor - Lighter Gray
     glUniform3f(colorLoc, 0.5f, 0.5f, 0.5f);
+    glUniform1i(useTextureLoc, 0); // Disable texture for floor
     room.drawFloor();
 
     // Ceiling - Dark Gray
     glUniform3f(colorLoc, 0.2f, 0.2f, 0.2f);
+    glUniform1i(useTextureLoc, 0); // Disable texture for ceiling
     room.drawCeiling();
 
     // Draw Kurna (Marble White/Grey)
     glUniform3f(colorLoc, 0.9f, 0.9f, 0.9f);
+    glUniform1i(useTextureLoc, 0); // Disable texture for Kurna
     glm_translate(
         model, (vec3){0.0f, -15.0f, 0.0f}); // [REVERTED] Floor is back at -15
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
@@ -516,12 +566,16 @@ int main() {
       glUniform1f(glGetUniformLocation(volShader, "stepSize"), rayStepSize);
 
       // [NEW] Pass Refraction and Dispersion Strength
-      glUniform1f(glGetUniformLocation(volShader, "refractionStrength"), refractionStrength);
-      glUniform1f(glGetUniformLocation(volShader, "dispersionStrength"), dispersionStrength);
-      glUniform1f(glGetUniformLocation(volShader, "temperatureIORScale"), temperatureIORScale);
+      glUniform1f(glGetUniformLocation(volShader, "refractionStrength"),
+                  refractionStrength);
+      glUniform1f(glGetUniformLocation(volShader, "dispersionStrength"),
+                  dispersionStrength);
+      glUniform1f(glGetUniformLocation(volShader, "temperatureIORScale"),
+                  temperatureIORScale);
 
       // [NEW] Pass number of ray march samples for averaging
-      glUniform1i(glGetUniformLocation(volShader, "numSamples"), rayMarchSamples);
+      glUniform1i(glGetUniformLocation(volShader, "numSamples"),
+                  rayMarchSamples);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_3D, volTexture);
@@ -537,9 +591,9 @@ int main() {
                   (float)fbWidth, (float)fbHeight);
 
       // Render Cube for Ray Marching Bounds
-      // Disable depth writes and depth test for volumetrics - the shader handles
-      // ray-box intersection internally, and we need to render regardless of
-      // whether camera is inside or outside the volume
+      // Disable depth writes and depth test for volumetrics - the shader
+      // handles ray-box intersection internally, and we need to render
+      // regardless of whether camera is inside or outside the volume
       glDepthMask(GL_FALSE);
       glDisable(GL_DEPTH_TEST);
       glDisable(GL_CULL_FACE); // Render both faces

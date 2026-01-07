@@ -18,42 +18,50 @@ void Room::init() {
   float halfD = depth / 2.0f;
 
   // Define vertices for an inverted cube (visible from inside)
-  // 36 vertices with 6 floats each (x, y, z, nx, ny, nz)
-  vertices = {// Back face (Normal +Z)
-              -halfW, -halfH, -halfD, 0.0f, 0.0f, 1.0f, halfW, -halfH, -halfD,
-              0.0f, 0.0f, 1.0f, halfW, halfH, -halfD, 0.0f, 0.0f, 1.0f, halfW,
-              halfH, -halfD, 0.0f, 0.0f, 1.0f, -halfW, halfH, -halfD, 0.0f,
-              0.0f, 1.0f, -halfW, -halfH, -halfD, 0.0f, 0.0f, 1.0f,
+  // 36 vertices with 8 floats each (x, y, z, nx, ny, nz, u, v)
+  vertices = {
+      // Back face (Normal +Z)
+      -halfW, -halfH, -halfD, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // Bottom-left
+      halfW, -halfH, -halfD, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f,  // Bottom-right
+      halfW, halfH, -halfD, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,   // Top-right
+      halfW, halfH, -halfD, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,   // Top-right
+      -halfW, halfH, -halfD, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f,  // Top-left
+      -halfW, -halfH, -halfD, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // Bottom-left
 
-              // Front face (Normal -Z)
-              -halfW, -halfH, halfD, 0.0f, 0.0f, -1.0f, halfW, -halfH, halfD,
-              0.0f, 0.0f, -1.0f, halfW, halfH, halfD, 0.0f, 0.0f, -1.0f, halfW,
-              halfH, halfD, 0.0f, 0.0f, -1.0f, -halfW, halfH, halfD, 0.0f, 0.0f,
-              -1.0f, -halfW, -halfH, halfD, 0.0f, 0.0f, -1.0f,
+      // Front face (Normal -Z)
+      -halfW, -halfH, halfD, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, halfW, -halfH,
+      halfD, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f, halfW, halfH, halfD, 0.0f, 0.0f,
+      -1.0f, 1.0f, 1.0f, halfW, halfH, halfD, 0.0f, 0.0f, -1.0f, 1.0f, 1.0f,
+      -halfW, halfH, halfD, 0.0f, 0.0f, -1.0f, 0.0f, 1.0f, -halfW, -halfH,
+      halfD, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f,
 
-              // Left face (Normal +X)
-              -halfW, halfH, halfD, 1.0f, 0.0f, 0.0f, -halfW, halfH, -halfD,
-              1.0f, 0.0f, 0.0f, -halfW, -halfH, -halfD, 1.0f, 0.0f, 0.0f,
-              -halfW, -halfH, -halfD, 1.0f, 0.0f, 0.0f, -halfW, -halfH, halfD,
-              1.0f, 0.0f, 0.0f, -halfW, halfH, halfD, 1.0f, 0.0f, 0.0f,
+      // Left face (Normal +X)
+      -halfW, halfH, halfD, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, -halfW, halfH, -halfD,
+      1.0f, 0.0f, 0.0f, 1.0f, 1.0f, -halfW, -halfH, -halfD, 1.0f, 0.0f, 0.0f,
+      0.0f, 1.0f, -halfW, -halfH, -halfD, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, -halfW,
+      -halfH, halfD, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, -halfW, halfH, halfD, 1.0f,
+      0.0f, 0.0f, 1.0f, 0.0f,
 
-              // Right face (Normal -X)
-              halfW, halfH, halfD, -1.0f, 0.0f, 0.0f, halfW, halfH, -halfD,
-              -1.0f, 0.0f, 0.0f, halfW, -halfH, -halfD, -1.0f, 0.0f, 0.0f,
-              halfW, -halfH, -halfD, -1.0f, 0.0f, 0.0f, halfW, -halfH, halfD,
-              -1.0f, 0.0f, 0.0f, halfW, halfH, halfD, -1.0f, 0.0f, 0.0f,
+      // Right face (Normal -X)
+      halfW, halfH, halfD, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, halfW, halfH, -halfD,
+      -1.0f, 0.0f, 0.0f, 1.0f, 0.0f, halfW, -halfH, -halfD, -1.0f, 0.0f, 0.0f,
+      1.0f, 1.0f, halfW, -halfH, -halfD, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f, halfW,
+      -halfH, halfD, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, halfW, halfH, halfD, -1.0f,
+      0.0f, 0.0f, 0.0f, 0.0f,
 
-              // Bottom face (Normal +Y)
-              -halfW, -halfH, -halfD, 0.0f, 1.0f, 0.0f, halfW, -halfH, -halfD,
-              0.0f, 1.0f, 0.0f, halfW, -halfH, halfD, 0.0f, 1.0f, 0.0f, halfW,
-              -halfH, halfD, 0.0f, 1.0f, 0.0f, -halfW, -halfH, halfD, 0.0f,
-              1.0f, 0.0f, -halfW, -halfH, -halfD, 0.0f, 1.0f, 0.0f,
+      // Bottom face (Normal +Y) - Floor
+      -halfW, -halfH, -halfD, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, halfW, -halfH,
+      -halfD, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, halfW, -halfH, halfD, 0.0f, 1.0f,
+      0.0f, 1.0f, 0.0f, halfW, -halfH, halfD, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f,
+      -halfW, -halfH, halfD, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, -halfW, -halfH,
+      -halfD, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
 
-              // Top face (Normal -Y)
-              -halfW, halfH, -halfD, 0.0f, -1.0f, 0.0f, halfW, halfH, -halfD,
-              0.0f, -1.0f, 0.0f, halfW, halfH, halfD, 0.0f, -1.0f, 0.0f, halfW,
-              halfH, halfD, 0.0f, -1.0f, 0.0f, -halfW, halfH, halfD, 0.0f,
-              -1.0f, 0.0f, -halfW, halfH, -halfD, 0.0f, -1.0f, 0.0f};
+      // Top face (Normal -Y) - Ceiling
+      -halfW, halfH, -halfD, 0.0f, -1.0f, 0.0f, 0.0f, 1.0f, halfW, halfH,
+      -halfD, 0.0f, -1.0f, 0.0f, 1.0f, 1.0f, halfW, halfH, halfD, 0.0f, -1.0f,
+      0.0f, 1.0f, 0.0f, halfW, halfH, halfD, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f,
+      -halfW, halfH, halfD, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, -halfW, halfH,
+      -halfD, 0.0f, -1.0f, 0.0f, 0.0f, 1.0f};
 
   glGenVertexArrays(1, &VAO);
   glGenBuffers(1, &VBO);
@@ -65,13 +73,18 @@ void Room::init() {
                vertices.data(), GL_STATIC_DRAW);
 
   // Vertex positions
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
   glEnableVertexAttribArray(0);
 
   // Normal vectors
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
                         (void *)(3 * sizeof(float)));
   glEnableVertexAttribArray(1);
+
+  // Texture coordinates
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
 
   glBindVertexArray(0); // Unbind
 }
