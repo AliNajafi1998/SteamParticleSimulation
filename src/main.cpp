@@ -118,7 +118,7 @@ int main() {
   // Initial empty upload to define format
   int dw, dh, dd;
   densityVolume.getParams(&dw, &dh, &dd);
-  glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, dw, dh, dd, 0, GL_RED, GL_FLOAT,
+  glTexImage3D(GL_TEXTURE_3D, 0, GL_RG32F, dw, dh, dd, 0, GL_RG, GL_FLOAT,
                NULL);
   glBindTexture(GL_TEXTURE_3D, 0);
 
@@ -191,7 +191,8 @@ int main() {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   // Initialize Steam Engine
-  SteamEngine steamEngine;
+  float spawn_range_multiplier = 1.5f;
+  SteamEngine steamEngine(spawn_range_multiplier);
   steamEngine.Initialize(2000000); // Start with capacity for 2000 particles
 
   // Render Loop
@@ -240,6 +241,17 @@ int main() {
     static float dispersionStrength = 0.01f;
     ImGui::SliderFloat("Dispersion Strength", &dispersionStrength, 0.0f, 1.0f);
 
+    // [NEW] Temperature IOR Scale - how much temperature affects refraction
+    static float temperatureIORScale = 0.5f;
+    ImGui::SliderFloat("Temp IOR Scale", &temperatureIORScale, 0.0f, 2.0f);
+
+    // [NEW] Ray Marcher Sample Count - run N times and average
+    static int rayMarchSamples = 1;
+    ImGui::SliderInt("Ray March Samples", &rayMarchSamples, 1, 16);
+
+    ImGui::SliderFloat("Spawn Range Multiplier", &spawn_range_multiplier, 0.5f,
+                       50.0f);
+
     ImGui::End();
 
     // Make sure to propagate ImGui input capture to camera?
@@ -256,7 +268,7 @@ int main() {
     densityVolume.Build(steamEngine.getParticles());
     const auto &volData = densityVolume.getData();
     glBindTexture(GL_TEXTURE_3D, volTexture);
-    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, dw, dh, dd, GL_RED, GL_FLOAT,
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, dw, dh, dd, GL_RG, GL_FLOAT,
                     volData.data());
     glBindTexture(GL_TEXTURE_3D, 0);
 
@@ -328,8 +340,8 @@ int main() {
 
     // Draw Room
 
-    // Wall Back - rgb(60, 99, 130) -> (0.235f, 0.388f, 0.510f)
-    glUniform3f(colorLoc, 60.0f / 255.0f, 99.0f / 255.0f, 130.0f / 255.0f);
+    // Wall Back - rgb(120, 99, 130) -> (0.235f, 0.388f, 0.510f)
+    glUniform3f(colorLoc, 120.0f / 255.0f, 99.0f / 255.0f, 130.0f / 255.0f);
     room.drawWallBack();
 
     // Wall Front - rgb(96, 163, 188) -> (0.376f, 0.639f, 0.737f)
@@ -340,8 +352,8 @@ int main() {
     glUniform3f(colorLoc, 10.0f / 255.0f, 61.0f / 255.0f, 98.0f / 255.0f);
     room.drawWallLeft();
 
-    // Wall Right - rgb(106, 137, 204) -> (0.416f, 0.537f, 0.800f)
-    glUniform3f(colorLoc, 106.0f / 255.0f, 137.0f / 255.0f, 204.0f / 255.0f);
+    // Wall Right - rgb(1, 10, 204) -> (0.416f, 0.537f, 0.800f)
+    glUniform3f(colorLoc, 1.0f / 255.0f, 10.0f / 255.0f, 204.0f / 255.0f);
     room.drawWallRight();
 
     // Floor - Lighter Gray
@@ -506,6 +518,10 @@ int main() {
       // [NEW] Pass Refraction and Dispersion Strength
       glUniform1f(glGetUniformLocation(volShader, "refractionStrength"), refractionStrength);
       glUniform1f(glGetUniformLocation(volShader, "dispersionStrength"), dispersionStrength);
+      glUniform1f(glGetUniformLocation(volShader, "temperatureIORScale"), temperatureIORScale);
+
+      // [NEW] Pass number of ray march samples for averaging
+      glUniform1i(glGetUniformLocation(volShader, "numSamples"), rayMarchSamples);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_3D, volTexture);

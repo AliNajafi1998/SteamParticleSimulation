@@ -7,7 +7,7 @@
 
 class SteamEngine {
 public:
-  SteamEngine();
+  SteamEngine(float& spawn_range_mult);
   ~SteamEngine();
 
   // Initialization
@@ -45,6 +45,7 @@ private:
   std::vector<SteamParticle> particlePool;
   std::vector<int> deadParticleIndices; // Free list for O(1) spawning
   SpatialGrid neighborGrid;             // Helper for fast lookups
+  float& spawn_range_multiplier;
 };
 
 #endif

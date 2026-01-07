@@ -12,6 +12,7 @@ uniform float stepSize; // Step size for ray marching
 // const float STEP_SIZE = 0.5; // [REPLACED]
 uniform float dispersionStrength; // [NEW] Dispersion Strength
 uniform vec3 lightPos; // [NEW] Light Position for Self Radiance
+uniform int numSamples; // [NEW] Number of ray march samples for averaging
 const int MAX_STEPS = 128;
 
 // [NEW] Background sampling for wall visibility through fog
@@ -26,12 +27,32 @@ uniform vec3 roomMax; // e.g. 25, 15, 25
 
 // [NEW] Refraction parameters
 uniform float refractionStrength; // How much the fog bends light (index of refraction effect)
+uniform float temperatureIORScale; // [NEW] How much temperature affects IOR (default ~0.5)
 const float IOR_AIR = 1.0;
+
+// [NEW] Base IOR for fog - will be modulated by temperature
+// Hot steam has lower density = lower IOR, Cold steam has higher density = higher IOR
+const float IOR_FOG_BASE = 1.02;
 
 // [NEW] Chromatic dispersion - different wavelengths refract differently
 // Based on Cauchy's equation: n(λ) = A + B/λ²
 // Red light (longer wavelength) bends less, blue light (shorter wavelength) bends more
 const vec3 IOR_FOG_CHROMATIC = vec3(1.018, 1.020, 1.024); // R, G, B - blue bends most
+
+// [NEW] Function to calculate temperature-dependent IOR
+// Hot steam (high temp) = lower IOR (less refraction)
+// Cold steam (low temp) = higher IOR (more refraction)
+float getTemperatureIOR(float baseIOR, float temperature, float strength) {
+    // temperature is normalized 0-1 (0 = cold, 1 = hot)
+    // Hot air/steam is less dense, so it has lower IOR
+    float tempFactor = 1.0 - temperature * strength * 0.05;
+    return baseIOR * tempFactor;
+}
+
+vec3 getTemperatureIORChromatic(vec3 baseIOR, float temperature, float strength) {
+    float tempFactor = 1.0 - temperature * strength * 0.05;
+    return baseIOR * tempFactor;
+}
 
 // --- NOISE FUNCTIONS ---
 // Simple Hash
@@ -105,6 +126,7 @@ vec3 getDensityGradient(vec3 pos, float epsilon) {
     vec3 uvw = (pos - boxMin) / (boxMax - boxMin);
     
     // Sample density at offset positions to compute gradient
+    // Texture now has 2 channels: R = density, G = temperature
     float dx = texture(densityTex, uvw + vec3(epsilon, 0.0, 0.0)).r 
              - texture(densityTex, uvw - vec3(epsilon, 0.0, 0.0)).r;
     float dy = texture(densityTex, uvw + vec3(0.0, epsilon, 0.0)).r 
@@ -113,6 +135,17 @@ vec3 getDensityGradient(vec3 pos, float epsilon) {
              - texture(densityTex, uvw - vec3(0.0, 0.0, epsilon)).r;
     
     return vec3(dx, dy, dz);
+}
+
+// [NEW] Sample density and temperature from the 3D texture
+// Returns vec2(density, temperature)
+vec2 sampleDensityAndTemp(vec3 pos) {
+    vec3 uvw = (pos - boxMin) / (boxMax - boxMin);
+    if (uvw.x < 0.0 || uvw.x > 1.0 || uvw.y < 0.0 || uvw.y > 1.0 || uvw.z < 0.0 || uvw.z > 1.0) {
+        return vec2(0.0);
+    }
+    vec2 sample = texture(densityTex, uvw).rg;
+    return sample; // r = density, g = temperature (normalized 0-1)
 }
 
 // [NEW] Refract ray direction based on density gradient
@@ -153,37 +186,47 @@ void main()
     float tStart = max(t.x, 0.0);
     float tEnd = t.y;
     
-    // Jitter start position to break up banding
-    // [USER SUGGESTION] Random ray offset
-    float randomOffset = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-    vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
-    float currentDist = tStart;
+    // [NEW] Multi-sample averaging accumulators
+    vec3 totalAccumulatedDensity = vec3(0.0);
+    vec3 totalAccumulatedRefractionR = vec3(0.0);
+    vec3 totalAccumulatedRefractionG = vec3(0.0);
+    vec3 totalAccumulatedRefractionB = vec3(0.0);
+    vec3 totalTotalColor = vec3(0.0);
     
-    // [NEW] Chromatic Dispersion
-    // Instead of one density, we accumulate a spectral color.
-    vec3 totalColor = vec3(0.0);
-    vec3 totalAlpha = vec3(0.0); // Transmissivity per channel? 
-    // Simplified: Just accumulate density per channel.
-    vec3 accumulatedDensity = vec3(0.0);
+    int actualSamples = max(numSamples, 1);
     
-    // Dispersion factor: How much the channels separate
-    // We can use stepSize to keep it relative to integration
-    float dispersion = dispersionStrength; 
+    for (int sampleIdx = 0; sampleIdx < actualSamples; sampleIdx++) {
+        // Jitter start position to break up banding
+        // [USER SUGGESTION] Random ray offset - different per sample
+        float randomOffset = fract(sin(dot(gl_FragCoord.xy + float(sampleIdx) * 17.31, vec2(12.9898, 78.233))) * 43758.5453);
+        vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
+        float currentDist = tStart;
+        
+        // [NEW] Chromatic Dispersion
+        // Instead of one density, we accumulate a spectral color.
+        vec3 totalColor = vec3(0.0);
+        vec3 totalAlpha = vec3(0.0); // Transmissivity per channel? 
+        // Simplified: Just accumulate density per channel.
+        vec3 accumulatedDensity = vec3(0.0);
+        
+        // Dispersion factor: How much the channels separate
+        // We can use stepSize to keep it relative to integration
+        float dispersion = dispersionStrength; 
+        
+        // [NEW] Accumulated refraction - tracks how much the ray has bent
+        vec3 accumulatedRefraction = vec3(0.0);
+        vec3 currentRayDir = viewDir; // Ray direction that gets refracted as we march
+        
+        // [NEW] Chromatic dispersion - separate ray directions per color channel
+        vec3 currentRayDirR = viewDir; // Red ray (bends least)
+        vec3 currentRayDirG = viewDir; // Green ray (reference)
+        vec3 currentRayDirB = viewDir; // Blue ray (bends most)
+        vec3 accumulatedRefractionR = vec3(0.0);
+        vec3 accumulatedRefractionG = vec3(0.0);
+        vec3 accumulatedRefractionB = vec3(0.0);
     
-    // [NEW] Accumulated refraction - tracks how much the ray has bent
-    vec3 accumulatedRefraction = vec3(0.0);
-    vec3 currentRayDir = viewDir; // Ray direction that gets refracted as we march
-    
-    // [NEW] Chromatic dispersion - separate ray directions per color channel
-    vec3 currentRayDirR = viewDir; // Red ray (bends least)
-    vec3 currentRayDirG = viewDir; // Green ray (reference)
-    vec3 currentRayDirB = viewDir; // Blue ray (bends most)
-    vec3 accumulatedRefractionR = vec3(0.0);
-    vec3 accumulatedRefractionG = vec3(0.0);
-    vec3 accumulatedRefractionB = vec3(0.0);
-    
-    int steps = 0;
-    while (currentDist < tEnd && steps < MAX_STEPS) {
+        int steps = 0;
+        while (currentDist < tEnd && steps < MAX_STEPS) {
         // Map position to UVW [0, 1]
         // Center (Green)
         vec3 uvwG = (currentPos - boxMin) / (boxMax - boxMin);
@@ -229,48 +272,96 @@ void main()
              totalColor += accumulatedDensity * stepSize * lightColor; 
         }
 
+        // --- RED SAMPLE (Offset forward) ---
+        if (uvwR.x >= 0.0 && uvwR.x <= 1.0 && uvwR.y >= 0.0 && uvwR.y <= 1.0 && uvwR.z >= 0.0 && uvwR.z <= 1.0) {
+            vec2 sampleR = texture(densityTex, uvwR).rg; // r = density, g = temperature
+            float dR = sampleR.r;
+            float tempR = sampleR.g;
+            if (dR > 0.01) {
+                float nR = fbm(posR * 1.5);
+                float densityContributionR = dR * (nR * 1.5) * stepSize;
+                accumulatedDensity.r += densityContributionR;
+                
+                // Compute refraction for red channel with temperature-dependent IOR
+                vec3 gradientR = getDensityGradient(posR, 0.02);
+                float gradientMagR = length(gradientR);
+                
+                if (gradientMagR > 0.001) {
+                    vec3 normalR = normalize(gradientR);
+                    // Apply temperature to IOR: hot steam = lower IOR, cold steam = higher IOR
+                    float tempIOR_R = getTemperatureIOR(IOR_FOG_CHROMATIC.r, tempR, temperatureIORScale);
+                    float etaR = IOR_AIR / tempIOR_R * (1.0 + dispersionStrength);
+                    vec3 refractedDirR = refractRay(currentRayDirR, normalR, etaR);
+                    
+                    float refractionWeightR = dR * refractionStrength * stepSize;
+                    accumulatedRefractionR += (refractedDirR - currentRayDirR) * refractionWeightR;
+                    
+                    float bendFactor = 0.1 * (1.0 + dispersionStrength);
+                    currentRayDirR = normalize(currentRayDirR + (refractedDirR - currentRayDirR) * refractionWeightR * bendFactor);
+                }
+            }
+        }
+
         // --- GREEN SAMPLE (Center) ---
         if (uvwG.x >= 0.0 && uvwG.x <= 1.0 && uvwG.y >= 0.0 && uvwG.y <= 1.0 && uvwG.z >= 0.0 && uvwG.z <= 1.0) {
-            float d = texture(densityTex, uvwG).r;
-            if (d > 0.01) {
-                float n = fbm(currentPos * 1.5);
-                float densityContribution = d * (n * 1.5) * stepSize;
-                accumulatedDensity.g += densityContribution;
+            vec2 sampleG = texture(densityTex, uvwG).rg; // r = density, g = temperature
+            float dG = sampleG.r;
+            float tempG = sampleG.g;
+            if (dG > 0.01) {
+                float nG = fbm(currentPos * 1.5);
+                float densityContributionG = dG * (nG * 1.5) * stepSize;
+                accumulatedDensity.g += densityContributionG;
                 
-                // [NEW] Compute refraction based on density gradient
-                // The gradient points towards higher density - we use this as a "surface normal"
-                vec3 gradient = getDensityGradient(currentPos, 0.02);
-                float gradientMag = length(gradient);
+                // Compute refraction for green channel with temperature-dependent IOR
+                vec3 gradientG = getDensityGradient(currentPos, 0.02);
+                float gradientMagG = length(gradientG);
                 
-                if (gradientMag > 0.001) {
-                    vec3 normal = normalize(gradient);
+                if (gradientMagG > 0.001) {
+                    vec3 normalG = normalize(gradientG);
+                    // Apply temperature to IOR: hot steam = lower IOR, cold steam = higher IOR
+                    float tempIOR_G = getTemperatureIOR(IOR_FOG_CHROMATIC.g, tempG, temperatureIORScale);
+                    float etaG = IOR_AIR / tempIOR_G * (1.0 + dispersionStrength);
+                    vec3 refractedDirG = refractRay(currentRayDirG, normalG, etaG);
                     
-                    // [NEW] Chromatic dispersion - each color channel refracts differently
-                    // Red (longest wavelength) bends least, blue (shortest) bends most
-                    float etaR = IOR_AIR / IOR_FOG_CHROMATIC.r * (1 + dispersionStrength);
-                    float etaG = IOR_AIR / IOR_FOG_CHROMATIC.g * (1 + dispersionStrength);
-                    float etaB = IOR_AIR / IOR_FOG_CHROMATIC.b * (1 + dispersionStrength);
+                    float refractionWeightG = dG * refractionStrength * stepSize;
+                    accumulatedRefractionG += (refractedDirG - currentRayDirG) * refractionWeightG;
                     
-                    // Calculate refracted directions for each channel
-                    vec3 refractedDirR = refractRay(currentRayDirR, normal, etaR);
-                    vec3 refractedDirG = refractRay(currentRayDirG, normal, etaG);
-                    vec3 refractedDirB = refractRay(currentRayDirB, normal, etaB);
-                    
-                    // Accumulate refraction offsets per channel
-                    float refractionWeight = d * refractionStrength * stepSize;
-                    accumulatedRefractionR += (refractedDirR - currentRayDirR) * refractionWeight;
-                    accumulatedRefractionG += (refractedDirG - currentRayDirG) * refractionWeight;
-                    accumulatedRefractionB += (refractedDirB - currentRayDirB) * refractionWeight;
-                    
-                    // Update ray directions for next iteration (with damping for stability)
                     float bendFactor = 0.1 * (1.0 + dispersionStrength);
-                    currentRayDirR = normalize(currentRayDirR + (refractedDirR - currentRayDirR) * refractionWeight * bendFactor);
-                    currentRayDirG = normalize(currentRayDirG + (refractedDirG - currentRayDirG) * refractionWeight * bendFactor);
-                    currentRayDirB = normalize(currentRayDirB + (refractedDirB - currentRayDirB) * refractionWeight * bendFactor);
+                    currentRayDirG = normalize(currentRayDirG + (refractedDirG - currentRayDirG) * refractionWeightG * bendFactor);
                     
                     // Keep the main ray direction as green (reference)
                     currentRayDir = currentRayDirG;
                     accumulatedRefraction = accumulatedRefractionG;
+                }
+            }
+        }
+
+        // --- BLUE SAMPLE (Offset backward) ---
+        if (uvwB.x >= 0.0 && uvwB.x <= 1.0 && uvwB.y >= 0.0 && uvwB.y <= 1.0 && uvwB.z >= 0.0 && uvwB.z <= 1.0) {
+            vec2 sampleB = texture(densityTex, uvwB).rg; // r = density, g = temperature
+            float dB = sampleB.r;
+            float tempB = sampleB.g;
+            if (dB > 0.01) {
+                float nB = fbm(posB * 1.5);
+                float densityContributionB = dB * (nB * 1.5) * stepSize;
+                accumulatedDensity.b += densityContributionB;
+                
+                // Compute refraction for blue channel with temperature-dependent IOR
+                vec3 gradientB = getDensityGradient(posB, 0.02);
+                float gradientMagB = length(gradientB);
+                
+                if (gradientMagB > 0.001) {
+                    vec3 normalB = normalize(gradientB);
+                    // Apply temperature to IOR: hot steam = lower IOR, cold steam = higher IOR
+                    float tempIOR_B = getTemperatureIOR(IOR_FOG_CHROMATIC.b, tempB, temperatureIORScale);
+                    float etaB = IOR_AIR / tempIOR_B * (1.0 + dispersionStrength);
+                    vec3 refractedDirB = refractRay(currentRayDirB, normalB, etaB);
+                    
+                    float refractionWeightB = dB * refractionStrength * stepSize;
+                    accumulatedRefractionB += (refractedDirB - currentRayDirB) * refractionWeightB;
+                    
+                    float bendFactor = 0.1 * (1.0 + dispersionStrength);
+                    currentRayDirB = normalize(currentRayDirB + (refractedDirB - currentRayDirB) * refractionWeightB * bendFactor);
                 }
             }
         }
@@ -279,17 +370,33 @@ void main()
         currentDist += stepSize;
         steps++;
         
-        if (accumulatedDensity.g > 5.0) break;
+        // Early exit if all channels are saturated
+        if (accumulatedDensity.r > 5.0 && accumulatedDensity.g > 5.0 && accumulatedDensity.b > 5.0) break;
     }
     
+        // Accumulate this sample's results
+        totalAccumulatedDensity += accumulatedDensity;
+        totalAccumulatedRefractionR += accumulatedRefractionR;
+        totalAccumulatedRefractionG += accumulatedRefractionG;
+        totalAccumulatedRefractionB += accumulatedRefractionB;
+        totalTotalColor += totalColor;
+    } // End of sample loop
+    
+    // Average over all samples
+    float invSamples = 1.0 / float(actualSamples);
+    vec3 avgAccumulatedDensity = totalAccumulatedDensity * invSamples;
+    vec3 avgAccumulatedRefractionR = totalAccumulatedRefractionR * invSamples;
+    vec3 avgAccumulatedRefractionG = totalAccumulatedRefractionG * invSamples;
+    vec3 avgAccumulatedRefractionB = totalAccumulatedRefractionB * invSamples;
+    
     // Beer's Law for each channel
-    vec3 transmission = exp(-accumulatedDensity * 0.5);
+    vec3 transmission = exp(-avgAccumulatedDensity * 0.5);
     vec3 alpha = 1.0 - transmission;
 
     // Approximated Light Color (Global average for now, better would be per-pixel integration)
     // Since we didn't fully integrate light in the loop (to keep it simple in the snippet above),
     // let's do a trick: Darken the bottom/dense parts based on total density.
-    float shadowFactor = exp(-accumulatedDensity.g * 0.8);
+    float shadowFactor = exp(-avgAccumulatedDensity.g * 0.8);
     
     // [TUNED] Make shadows brighter (0.8 floor) - Lighter Steam
     vec3 finalLight = vec3(1.0) * (shadowFactor * 0.2 + 0.8); 
@@ -311,9 +418,9 @@ void main()
     vec3 hitPos = viewPos + viewDir * sampleDist;
     
     // [NEW] Per-channel refracted positions for chromatic dispersion
-    vec3 refractedHitPosR = hitPos + accumulatedRefractionR * sampleDist * 2.0;
-    vec3 refractedHitPosG = hitPos + accumulatedRefractionG * sampleDist * 2.0;
-    vec3 refractedHitPosB = hitPos + accumulatedRefractionB * sampleDist * 2.0;
+    vec3 refractedHitPosR = hitPos + avgAccumulatedRefractionR * sampleDist * 2.0;
+    vec3 refractedHitPosG = hitPos + avgAccumulatedRefractionG * sampleDist * 2.0;
+    vec3 refractedHitPosB = hitPos + avgAccumulatedRefractionB * sampleDist * 2.0;
     
     // Sample background at the refracted position
     vec2 screenUV = gl_FragCoord.xy / viewportSize;

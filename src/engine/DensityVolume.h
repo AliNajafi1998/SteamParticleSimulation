@@ -19,7 +19,7 @@ public:
   // Get dimensions
   void getParams(int *w, int *h, int *d) const;
 
-  // Get raw data for texture upload
+  // Get raw data for texture upload (interleaved: density, temperature per voxel)
   const std::vector<float> &getData() const;
 
   void Clear(); // Moved to public
@@ -27,7 +27,7 @@ public:
 private:
   int width, height, depth;
   float cellWidth, cellHeight, cellDepth;
-  std::vector<float> data;
+  std::vector<float> data; // 2 floats per voxel: [density, temperature]
 
   // Bounds of the volume (could be static or dynamic, for now static room
   // size?) Room is 30x30x30 often centered or on floor. Let's assume a fixed

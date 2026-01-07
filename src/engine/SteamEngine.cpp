@@ -3,7 +3,8 @@
 #include <algorithm> // for std::max
 #include <iostream>
 
-SteamEngine::SteamEngine() {
+SteamEngine::SteamEngine(float& spawn_range_mult)
+    : spawn_range_multiplier(spawn_range_mult) {
   // Initialization
   // Gravity: Reduced from -9.8 to -0.5 to simulate air resistance/buoyancy
   gravity = -0.5f;
@@ -288,10 +289,10 @@ void SteamEngine::SpawnParticles(float deltaTime) {
 
       // Random Position
       p.position[0] =
-          ((rand() % 100) / 100.0f - 0.5f) * 1.5f; // Slightly wider spread
+          ((rand() % 100) / 100.0f - 0.5f) * spawn_range_multiplier; // Slightly wider spread
       p.position[1] =
           -14.0f; // Just above Kurna (Floor is -15, Kurna is 1 high)
-      p.position[2] = ((rand() % 100) / 100.0f - 0.5f) * 1.5f;
+      p.position[2] = ((rand() % 100) / 100.0f - 0.5f) * spawn_range_multiplier;
 
       glm_vec3_zero(p.velocity);
       p.velocity[1] = 0.5f;
