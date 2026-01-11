@@ -12,7 +12,7 @@ CC := clang
 CXX := clang++
 CFLAGS := -Wall -Wextra -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/imgui -I$(GLFW_INCLUDE_DIR)
 CXXFLAGS := -std=c++11 -Wall -Wextra -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/imgui -I$(GLFW_INCLUDE_DIR)
-LDFLAGS := -L$(GLFW_LIB_DIR) -lglfw -ldl -framework OpenGL -framework Cocoa
+LDFLAGS := -L$(GLFW_LIB_DIR) -lglfw -ldl
 
 SRCS_C := $(wildcard $(SRC_DIR)/*.c)
 SRCS_CXX := $(wildcard $(SRC_DIR)/*.cpp)           $(wildcard $(SRC_DIR)/imgui/*.cpp) \

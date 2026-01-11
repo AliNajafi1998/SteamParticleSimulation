@@ -109,4 +109,7 @@ void Camera::ProcessMouseScroll(float yoffset) {
   vec3 temp;
   glm_vec3_scale(Front, velocity, temp);
   glm_vec3_add(Position, temp, Position);
+
+  std::cerr << "In-world camera position: (" << Position[0] << ", " << Position[1]
+            << ", " << Position[2] << ")\n";
 }

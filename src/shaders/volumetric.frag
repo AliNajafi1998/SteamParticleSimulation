@@ -74,15 +74,16 @@ void main()
     
     vec2 t = intersectBox(viewPos, viewDir);
     
-    if (t.x > t.y) discard; // No intersection
+    if (t.x > t.y || t.y < 0.0) discard; // No intersection or box entirely behind camera
     
     // Start marching from entry point (or camera position if inside)
+    // When camera is inside the volume, t.x is negative, so clamp to 0
     float tStart = max(t.x, 0.0);
     float tEnd = t.y;
     
     // Jitter start position to break up banding
     // [USER SUGGESTION] Random ray offset
-    float randomOffset = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    float randomOffset =  0; //fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
     float currentDist = tStart;
     
@@ -145,7 +146,7 @@ void main()
         }
 
         // --- GREEN SAMPLE (Center) ---
-        if(uvwG.x >= 0.0 && uvwG.x <= 1.0 && uvwG.y >= 0.0 && uvwG.y <= 1.0 && uvwG.z >= 0.0 && uvwG.z <= 1.0) {
+        if (uvwG.x >= 0.0 && uvwG.x <= 1.0 && uvwG.y >= 0.0 && uvwG.y <= 1.0 && uvwG.z >= 0.0 && uvwG.z <= 1.0) {
             float d = texture(densityTex, uvwG).r;
             if (d > 0.01) {
                 float n = fbm(currentPos * 1.5);
@@ -158,24 +159,6 @@ void main()
                 // We'll store the "Shadowed Density" in the Green channel for now to visualize it?
                 // No, let's keep it simple first: just modify the alpha/density accumulation?
                 // Actually, let's just use the shadow to darken the final output.
-            }
-        }
-        
-        // --- RED SAMPLE ---
-        if(uvwR.x >= 0.0 && uvwR.x <= 1.0 && uvwR.y >= 0.0 && uvwR.y <= 1.0 && uvwR.z >= 0.0 && uvwR.z <= 1.0) {
-            float d = texture(densityTex, uvwR).r;
-            if (d > 0.01) {
-                float n = fbm(posR * 1.5);
-                accumulatedDensity.r += d * (n * 1.5) * stepSize;
-            }
-        }
-        
-        // --- BLUE SAMPLE ---
-        if(uvwB.x >= 0.0 && uvwB.x <= 1.0 && uvwB.y >= 0.0 && uvwB.y <= 1.0 && uvwB.z >= 0.0 && uvwB.z <= 1.0) {
-            float d = texture(densityTex, uvwB).r;
-            if (d > 0.01) {
-                float n = fbm(posB * 1.5);
-                accumulatedDensity.b += d * (n * 1.5) * stepSize;
             }
         }
         
@@ -206,6 +189,4 @@ void main()
     // Mix dispersion
     vec3 dispersionColor = vec3(alpha.r, alpha.g, alpha.b);
     FragColor.rgb = mix(FragColor.rgb, dispersionColor, dispersionStrength * 5.0); // Boost dispersion visual
-
-    if (FragColor.a < 0.01) discard;
 }

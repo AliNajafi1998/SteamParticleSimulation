@@ -86,7 +86,7 @@ int main() {
   Room room(50.0f, 30.0f, 50.0f); // [RESIZED] Width/Depth 50, Height 30
   room.setTemperature(25.0f);
 
-  // Initialize Kurna (Radius, Height)
+  // Initialize KURWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA (Radius, Height)
   Kurna kurna(2.0f, 1.0f);
 
   // [NEW] Volumetric Texture setup
@@ -111,6 +111,8 @@ int main() {
 
   bool debugMode =
       true; // Toggle between Particles (True) and Volumetric (False)
+
+  bool pause = false;
 
   // Main loop
   // Initial empty upload to define format
@@ -155,6 +157,39 @@ int main() {
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
   glBindVertexArray(0);
 
+  // [NEW] FBO Setup for Refraction (High-DPI Aware)
+  int fbWidth, fbHeight;
+  glfwGetFramebufferSize(window, &fbWidth, &fbHeight); // Query actual pixels
+
+  unsigned int framebuffer;
+  glGenFramebuffers(1, &framebuffer);
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+  // Create texture to hold color attachment
+  unsigned int texColorBuffer;
+  glGenTextures(1, &texColorBuffer);
+  glBindTexture(GL_TEXTURE_2D, texColorBuffer);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fbWidth, fbHeight, 0, GL_RGB,
+               GL_UNSIGNED_BYTE, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         texColorBuffer, 0);
+
+  // Create RBO for depth/stencil
+  unsigned int rbo;
+  glGenRenderbuffers(1, &rbo);
+  glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fbWidth,
+                        fbHeight);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, rbo);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    std::cout << "ERROR::FRAMEBUFFER:: Framebuffer is not complete!"
+              << std::endl;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
   // Initialize Steam Engine
   SteamEngine steamEngine;
   steamEngine.Initialize(2000000); // Start with capacity for 2000 particles
@@ -183,6 +218,7 @@ int main() {
 
     ImGui::Separator();
     ImGui::Checkbox("Debug Mode (Particles)", &debugMode);
+    ImGui::Checkbox("Pause Simulation", &pause);
 
     ImGui::Separator();
     ImGui::Text("Physics Parameters");
@@ -206,7 +242,7 @@ int main() {
     }
 
     // Update Steam Simulation
-    steamEngine.Update(deltaTime);
+    if (!pause) steamEngine.Update(deltaTime);
 
     // [NEW] Update Density Volume
     densityVolume.Build(steamEngine.getParticles());
@@ -242,6 +278,8 @@ int main() {
     }
 
     // Render
+    // [NEW] Pass 1: Render Scene to FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -312,6 +350,14 @@ int main() {
         model, (vec3){0.0f, -15.0f, 0.0f}); // [REVERTED] Floor is back at -15
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float *)model);
     kurna.draw();
+
+    // [NEW] Pass 2: Blit FBO to Default Framebuffer
+    // Use ACTUAL Framebuffer size for Blit
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glBlitFramebuffer(0, 0, fbWidth, fbHeight, 0, 0, fbWidth, fbHeight,
+                      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0); // Back to default
 
     // [NEW] Render Particles as Points (DEBUG MODE)
     if (debugMode) {
@@ -406,15 +452,6 @@ int main() {
       // Logic for volumetric rendering:
       // 1. Update DensityVolume from particles
       densityVolume.Clear();
-      for (const auto &p : steamEngine.getParticles()) {
-        if (p.active) {
-          // Map world pos to grid.
-          // World: -15 to 15? Grid: 0 to 64
-          // Need a mapping function/logic.
-          // For now, let's just stick to the particles until DensityVolume is
-          // fully connected.
-        }
-      }
 
       // Temporarily, let's keep the block commented out or minimal until
       // DensityVolume is verified connected to avoid "Red Screen" if texture is
@@ -446,6 +483,10 @@ int main() {
       glUniform3f(glGetUniformLocation(volShader, "lightPos"), 0.0f, 15.0f,
                   0.0f);
 
+      // [NEW] Pass Time for Animation
+      glUniform1f(glGetUniformLocation(volShader, "time"),
+                  (float)glfwGetTime());
+
       // Pass Step Size
       glUniform1f(glGetUniformLocation(volShader, "stepSize"), rayStepSize);
 
@@ -453,10 +494,27 @@ int main() {
       glBindTexture(GL_TEXTURE_3D, volTexture);
       glUniform1i(glGetUniformLocation(volShader, "densityTex"), 0);
 
+      // [NEW] Bind Background Texture (Unit 1)
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, texColorBuffer);
+      glUniform1i(glGetUniformLocation(volShader, "backgroundTex"), 1);
+
+      // Pass Viewport Size
+      glUniform2f(glGetUniformLocation(volShader, "viewportSize"),
+                  (float)fbWidth, (float)fbHeight);
+
       // Render Cube for Ray Marching Bounds
+      // Disable depth writes and depth test for volumetrics - the shader handles
+      // ray-box intersection internally, and we need to render regardless of
+      // whether camera is inside or outside the volume
+      glDepthMask(GL_FALSE);
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_CULL_FACE); // Render both faces
       glBindVertexArray(cubeVAO);
       glDrawArrays(GL_TRIANGLES, 0, 36);
       glBindVertexArray(0);
+      glEnable(GL_DEPTH_TEST);
+      glDepthMask(GL_TRUE);
 
       glDisable(GL_BLEND);
     }
