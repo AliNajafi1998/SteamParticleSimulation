@@ -14,6 +14,25 @@ uniform float dispersionStrength; // [NEW] Dispersion Strength
 uniform vec3 lightPos; // [NEW] Light Position for Self Radiance
 const int MAX_STEPS = 128;
 
+// [NEW] Background sampling for wall visibility through fog
+uniform sampler2D backgroundTex;
+uniform vec2 viewportSize;
+uniform mat4 view;
+uniform mat4 projection;
+
+// Room bounds (walls)
+uniform vec3 roomMin; // e.g. -25, -15, -25
+uniform vec3 roomMax; // e.g. 25, 15, 25
+
+// [NEW] Refraction parameters
+uniform float refractionStrength; // How much the fog bends light (index of refraction effect)
+const float IOR_AIR = 1.0;
+
+// [NEW] Chromatic dispersion - different wavelengths refract differently
+// Based on Cauchy's equation: n(λ) = A + B/λ²
+// Red light (longer wavelength) bends less, blue light (shorter wavelength) bends more
+const vec3 IOR_FOG_CHROMATIC = vec3(1.018, 1.020, 1.024); // R, G, B - blue bends most
+
 // --- NOISE FUNCTIONS ---
 // Simple Hash
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
@@ -57,6 +76,59 @@ vec2 intersectBox(vec3 origin, vec3 dir) {
     return vec2(tNear, tFar);
 }
 
+// [NEW] Intersect with room walls (for sampling background behind fog)
+vec2 intersectRoom(vec3 origin, vec3 dir) {
+    vec3 tMin = (roomMin - origin) / dir;
+    vec3 tMax = (roomMax - origin) / dir;
+    vec3 t1 = min(tMin, tMax);
+    vec3 t2 = max(tMin, tMax);
+    float tNear = max(max(t1.x, t1.y), t1.z);
+    float tFar = min(min(t2.x, t2.y), t2.z);
+    return vec2(tNear, tFar);
+}
+
+// [NEW] Sample background texture at a world position
+vec3 sampleBackground(vec3 worldPos) {
+    // Project world position to screen space
+    vec4 clipPos = projection * view * vec4(worldPos, 1.0);
+    vec3 ndc = clipPos.xyz / clipPos.w;
+    vec2 screenUV = ndc.xy * 0.5 + 0.5;
+    
+    // Clamp to valid range
+    screenUV = clamp(screenUV, 0.0, 1.0);
+    
+    return texture(backgroundTex, screenUV).rgb;
+}
+
+// [NEW] Compute density gradient at a position (for refraction normal)
+vec3 getDensityGradient(vec3 pos, float epsilon) {
+    vec3 uvw = (pos - boxMin) / (boxMax - boxMin);
+    
+    // Sample density at offset positions to compute gradient
+    float dx = texture(densityTex, uvw + vec3(epsilon, 0.0, 0.0)).r 
+             - texture(densityTex, uvw - vec3(epsilon, 0.0, 0.0)).r;
+    float dy = texture(densityTex, uvw + vec3(0.0, epsilon, 0.0)).r 
+             - texture(densityTex, uvw - vec3(0.0, epsilon, 0.0)).r;
+    float dz = texture(densityTex, uvw + vec3(0.0, 0.0, epsilon)).r 
+             - texture(densityTex, uvw - vec3(0.0, 0.0, epsilon)).r;
+    
+    return vec3(dx, dy, dz);
+}
+
+// [NEW] Refract ray direction based on density gradient
+vec3 refractRay(vec3 rayDir, vec3 normal, float eta) {
+    float cosI = -dot(normal, rayDir);
+    float sinT2 = eta * eta * (1.0 - cosI * cosI);
+    
+    if (sinT2 > 1.0) {
+        // Total internal reflection - just reflect
+        return reflect(rayDir, normal);
+    }
+    
+    float cosT = sqrt(1.0 - sinT2);
+    return eta * rayDir + (eta * cosI - cosT) * normal;
+}
+
 void main()
 {        
     vec3 viewDir = normalize(FragPos - viewPos);
@@ -83,7 +155,7 @@ void main()
     
     // Jitter start position to break up banding
     // [USER SUGGESTION] Random ray offset
-    float randomOffset =  0; //fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    float randomOffset = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     vec3 currentPos = viewPos + viewDir * (tStart + stepSize * randomOffset);
     float currentDist = tStart;
     
@@ -97,6 +169,18 @@ void main()
     // Dispersion factor: How much the channels separate
     // We can use stepSize to keep it relative to integration
     float dispersion = dispersionStrength; 
+    
+    // [NEW] Accumulated refraction - tracks how much the ray has bent
+    vec3 accumulatedRefraction = vec3(0.0);
+    vec3 currentRayDir = viewDir; // Ray direction that gets refracted as we march
+    
+    // [NEW] Chromatic dispersion - separate ray directions per color channel
+    vec3 currentRayDirR = viewDir; // Red ray (bends least)
+    vec3 currentRayDirG = viewDir; // Green ray (reference)
+    vec3 currentRayDirB = viewDir; // Blue ray (bends most)
+    vec3 accumulatedRefractionR = vec3(0.0);
+    vec3 accumulatedRefractionG = vec3(0.0);
+    vec3 accumulatedRefractionB = vec3(0.0);
     
     int steps = 0;
     while (currentDist < tEnd && steps < MAX_STEPS) {
@@ -153,16 +237,45 @@ void main()
                 float densityContribution = d * (n * 1.5) * stepSize;
                 accumulatedDensity.g += densityContribution;
                 
-                // Hacky Integration of Light into Alpha
-                // We really should accumulate Color and Alpha separately.
-                // Let's assume white steam for now, dimmed by shadow.
-                // We'll store the "Shadowed Density" in the Green channel for now to visualize it?
-                // No, let's keep it simple first: just modify the alpha/density accumulation?
-                // Actually, let's just use the shadow to darken the final output.
+                // [NEW] Compute refraction based on density gradient
+                // The gradient points towards higher density - we use this as a "surface normal"
+                vec3 gradient = getDensityGradient(currentPos, 0.02);
+                float gradientMag = length(gradient);
+                
+                if (gradientMag > 0.001) {
+                    vec3 normal = normalize(gradient);
+                    
+                    // [NEW] Chromatic dispersion - each color channel refracts differently
+                    // Red (longest wavelength) bends least, blue (shortest) bends most
+                    float etaR = IOR_AIR / IOR_FOG_CHROMATIC.r * (1 + dispersionStrength);
+                    float etaG = IOR_AIR / IOR_FOG_CHROMATIC.g * (1 + dispersionStrength);
+                    float etaB = IOR_AIR / IOR_FOG_CHROMATIC.b * (1 + dispersionStrength);
+                    
+                    // Calculate refracted directions for each channel
+                    vec3 refractedDirR = refractRay(currentRayDirR, normal, etaR);
+                    vec3 refractedDirG = refractRay(currentRayDirG, normal, etaG);
+                    vec3 refractedDirB = refractRay(currentRayDirB, normal, etaB);
+                    
+                    // Accumulate refraction offsets per channel
+                    float refractionWeight = d * refractionStrength * stepSize;
+                    accumulatedRefractionR += (refractedDirR - currentRayDirR) * refractionWeight;
+                    accumulatedRefractionG += (refractedDirG - currentRayDirG) * refractionWeight;
+                    accumulatedRefractionB += (refractedDirB - currentRayDirB) * refractionWeight;
+                    
+                    // Update ray directions for next iteration (with damping for stability)
+                    float bendFactor = 0.1 * (1.0 + dispersionStrength);
+                    currentRayDirR = normalize(currentRayDirR + (refractedDirR - currentRayDirR) * refractionWeight * bendFactor);
+                    currentRayDirG = normalize(currentRayDirG + (refractedDirG - currentRayDirG) * refractionWeight * bendFactor);
+                    currentRayDirB = normalize(currentRayDirB + (refractedDirB - currentRayDirB) * refractionWeight * bendFactor);
+                    
+                    // Keep the main ray direction as green (reference)
+                    currentRayDir = currentRayDirG;
+                    accumulatedRefraction = accumulatedRefractionG;
+                }
             }
         }
         
-        currentPos += viewDir * stepSize;
+        currentPos += currentRayDir * stepSize; // Use potentially refracted direction
         currentDist += stepSize;
         steps++;
         
@@ -181,12 +294,77 @@ void main()
     // [TUNED] Make shadows brighter (0.8 floor) - Lighter Steam
     vec3 finalLight = vec3(1.0) * (shadowFactor * 0.2 + 0.8); 
 
+    // [NEW] Sample background/walls where the ray exits the fog volume
+    // Find where the ray hits the room walls
+    vec2 roomT = intersectRoom(viewPos, viewDir);
+    float wallDist = roomT.y; // Distance to far wall
+    
+    // If the ray exits the fog volume before hitting walls, sample at exit point
+    // Otherwise sample at wall hit point
+    float sampleDist = max(tEnd, 0.0);
+    if (wallDist > 0.0 && wallDist > tEnd) {
+        sampleDist = wallDist;
+    }
+    
+    // [NEW] Calculate refracted hit position
+    // The ray has been bent by the fog, so we sample from a displaced position
+    vec3 hitPos = viewPos + viewDir * sampleDist;
+    
+    // [NEW] Per-channel refracted positions for chromatic dispersion
+    vec3 refractedHitPosR = hitPos + accumulatedRefractionR * sampleDist * 2.0;
+    vec3 refractedHitPosG = hitPos + accumulatedRefractionG * sampleDist * 2.0;
+    vec3 refractedHitPosB = hitPos + accumulatedRefractionB * sampleDist * 2.0;
+    
+    // Sample background at the refracted position
+    vec2 screenUV = gl_FragCoord.xy / viewportSize;
+    
+    // [NEW] Calculate per-channel refracted UV offsets for chromatic dispersion
+    vec4 originalClip = projection * view * vec4(hitPos, 1.0);
+    vec4 refractedClipR = projection * view * vec4(refractedHitPosR, 1.0);
+    vec4 refractedClipG = projection * view * vec4(refractedHitPosG, 1.0);
+    vec4 refractedClipB = projection * view * vec4(refractedHitPosB, 1.0);
+    
+    vec2 originalNDC = originalClip.xy / originalClip.w;
+    vec2 refractedNDC_R = refractedClipR.xy / refractedClipR.w;
+    vec2 refractedNDC_G = refractedClipG.xy / refractedClipG.w;
+    vec2 refractedNDC_B = refractedClipB.xy / refractedClipB.w;
+    
+    // Calculate per-channel UV offsets from dispersion
+    vec2 refractionUVOffsetR = (refractedNDC_R - originalNDC) * 0.5;
+    vec2 refractionUVOffsetG = (refractedNDC_G - originalNDC) * 0.5;
+    vec2 refractionUVOffsetB = (refractedNDC_B - originalNDC) * 0.5;
+    
+    // Apply chromatic dispersion - additional separation based on dispersionStrength
+    float chromaticSpread = dispersionStrength * 0.02;
+    vec2 uvR = screenUV + refractionUVOffsetR * (1.0 + chromaticSpread);
+    vec2 uvG = screenUV + refractionUVOffsetG;
+    vec2 uvB = screenUV + refractionUVOffsetB * (1.0 - chromaticSpread);
+    
+    // Clamp UVs to valid range
+    uvR = clamp(uvR, 0.0, 1.0);
+    uvG = clamp(uvG, 0.0, 1.0);
+    uvB = clamp(uvB, 0.0, 1.0);
+    
+    // Sample background with chromatic dispersion
+    vec3 backgroundColor;
+    backgroundColor.r = texture(backgroundTex, uvR).r;
+    backgroundColor.g = texture(backgroundTex, uvG).g;
+    backgroundColor.b = texture(backgroundTex, uvB).b;
+
     // Output
     // [TUNED] Color: Brighter White/Blueish
     vec3 steamColor = vec3(1.2, 1.25, 1.3); // Overdrive > 1.0 for "glowing" white feel
-    FragColor = vec4(finalLight * steamColor, alpha.g); 
+    vec3 fogColor = finalLight * steamColor;
     
-    // Mix dispersion
+    // Mix dispersion into fog color
     vec3 dispersionColor = vec3(alpha.r, alpha.g, alpha.b);
-    FragColor.rgb = mix(FragColor.rgb, dispersionColor, dispersionStrength * 5.0); // Boost dispersion visual
+    fogColor = mix(fogColor, dispersionColor, dispersionStrength * 5.0); // Boost dispersion visual
+    
+    // [NEW] Blend fog with background based on transmittance
+    // transmittance = how much background shows through
+    // alpha = how much fog occludes
+    float fogAlpha = alpha.g;
+    vec3 finalColor = mix(backgroundColor, fogColor, fogAlpha);
+    
+    FragColor = vec4(finalColor, 1.0); // Output as opaque since we've already blended
 }

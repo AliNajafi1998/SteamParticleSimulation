@@ -232,6 +232,14 @@ int main() {
     static float rayStepSize = 0.5f;
     ImGui::SliderFloat("Ray Step Size", &rayStepSize, 0.05f, 2.0f);
 
+    // [NEW] Refraction Strength
+    static float refractionStrength = 0.015f;
+    ImGui::SliderFloat("Refraction Strength", &refractionStrength, 0.0f, 2.0f);
+
+    // [NEW] Dispersion Strength
+    static float dispersionStrength = 0.01f;
+    ImGui::SliderFloat("Dispersion Strength", &dispersionStrength, 0.0f, 1.0f);
+
     ImGui::End();
 
     // Make sure to propagate ImGui input capture to camera?
@@ -479,6 +487,11 @@ int main() {
                   -25.0f);
       glUniform3f(glGetUniformLocation(volShader, "boxMax"), 25.0f, 15.0f,
                   25.0f);
+      // [NEW] Room bounds for wall intersection
+      glUniform3f(glGetUniformLocation(volShader, "roomMin"), -25.0f, -15.0f,
+                  -25.0f);
+      glUniform3f(glGetUniformLocation(volShader, "roomMax"), 25.0f, 15.0f,
+                  25.0f);
       // Pass Light Pos (Top Center)
       glUniform3f(glGetUniformLocation(volShader, "lightPos"), 0.0f, 15.0f,
                   0.0f);
@@ -489,6 +502,10 @@ int main() {
 
       // Pass Step Size
       glUniform1f(glGetUniformLocation(volShader, "stepSize"), rayStepSize);
+
+      // [NEW] Pass Refraction and Dispersion Strength
+      glUniform1f(glGetUniformLocation(volShader, "refractionStrength"), refractionStrength);
+      glUniform1f(glGetUniformLocation(volShader, "dispersionStrength"), dispersionStrength);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_3D, volTexture);
